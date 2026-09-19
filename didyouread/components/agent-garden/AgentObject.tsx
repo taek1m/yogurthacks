@@ -8,6 +8,7 @@ import { createPortal } from "react-dom";
 import { agentIconMap } from "@/components/agent-garden/agentIconMap";
 import { getStablePosition } from "@/lib/agent-utils";
 import type { DocumentAgent, GardenPosition } from "@/types/agent";
+import { MiiCharacter } from "@/components/agent-garden/MiiCharacter";
 
 export function AgentObject({
   agent,
@@ -196,10 +197,13 @@ export function AgentObject({
         onClick={(event) => { if (suppressClick.current) event.preventDefault(); }}
         className={`group flex w-full min-w-0 select-none flex-col items-center text-center focus-visible:outline-none md:touch-none ${dragging ? "cursor-grabbing" : "cursor-pointer"}`}
       >
-        <span className={`relative grid size-20 place-items-center rounded-lg border-2 shadow-[0_8px_0_rgba(41,81,46,0.12)] transition duration-200 group-hover:-translate-y-1 group-hover:shadow-[0_12px_0_rgba(41,81,46,0.10)] group-focus-visible:outline-3 group-focus-visible:outline-offset-4 group-focus-visible:outline-[#265f3b] motion-reduce:transform-none ${pressing ? "scale-[1.03] ring-2 ring-[#3d7b50]/40" : ""} ${dragging ? "scale-105 ring-2 ring-[#2d6b43]" : ""} ${visual.objectClass}`}>
-          <Icon size={43} strokeWidth={1.8} className={visual.iconClass} aria-hidden="true" />
-          <Grip size={14} className="absolute bottom-1 right-1 hidden text-black/35 md:block" aria-hidden="true" />
-        </span>
+       <div className="relative flex flex-col items-center">
+  {/* Wii Mii 캐릭터 (누르는 중이거나 드래그 중일 때 허우적거림 활성화) */}
+  <MiiCharacter
+    isHeld={pressing || dragging}
+    docType={agent.documentType}
+  />
+</div>
         <span className="mt-3 w-full rounded-md bg-[#fffef9]/95 px-2 py-1.5 shadow-sm ring-1 ring-[#d6e1d2]">
           <span className="block truncate text-sm font-bold text-[#193a28]">{agent.name}</span>
           <span className="block truncate text-xs text-[#5d7465]">{agent.documentName}</span>
