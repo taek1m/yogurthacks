@@ -39,3 +39,38 @@ textarea {
   background: #bce4c5;
   color: #10261c;
 }
+
+/* Agent garden: the cannon that deletes an agent by firing it out of the world. */
+@keyframes agentLaunch {
+  0% { transform: translate(0, 0) rotate(0deg) scale(0.34); opacity: 1; }
+  18% { transform: translate(90px, -120px) rotate(200deg) scale(1); opacity: 1; }
+  100% { transform: translate(620px, -680px) rotate(1180deg) scale(0.15); opacity: 0; }
+}
+
+@keyframes cannonRecoil {
+  0% { transform: translate(0, 0) rotate(0deg); }
+  14% { transform: translate(-13px, 9px) rotate(-9deg); }
+  55% { transform: translate(4px, -2px) rotate(3deg); }
+  100% { transform: translate(0, 0) rotate(0deg); }
+}
+
+@keyframes cannonFlash {
+  0% { transform: scale(0.2); opacity: 0; }
+  20% { transform: scale(1.25); opacity: 1; }
+  100% { transform: scale(2.1); opacity: 0; }
+}
+
+@keyframes cannonSmoke {
+  0% { transform: translate(0, 0) scale(0.4); opacity: 0.85; }
+  100% { transform: translate(46px, -54px) scale(1.8); opacity: 0; }
+}
+
+@keyframes agentTear {
+  0% { transform: translateY(0) scale(0.7); opacity: 0; }
+  25% { opacity: 1; }
+  100% { transform: translateY(13px) scale(1); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-agent-launch] { animation-duration: 1ms !important; }
+}

@@ -3,12 +3,16 @@
 import { Cloud, Sprout } from "lucide-react";
 import { useRef, useState } from "react";
 import { AgentObject } from "@/components/agent-garden/AgentObject";
+import { Cannon } from "@/components/agent-garden/Cannon";
 import { CreateAgentObject } from "@/components/agent-garden/CreateAgentObject";
 import type { DocumentAgent, GardenPosition } from "@/types/agent";
 
 export function AgentGarden({ agents: initialAgents }: { agents: DocumentAgent[] }) {
   const [agents, setAgents] = useState(initialAgents);
   const gardenRef = useRef<HTMLDivElement>(null);
+  const cannonRef = useRef<HTMLDivElement>(null);
+  const [cannonArmed, setCannonArmed] = useState(false);
+  const [blastKey, setBlastKey] = useState(0);
   const empty = agents.length === 0;
 
   async function patchAgent(id: string, updates: { name?: string; position?: GardenPosition }) {
@@ -66,11 +70,17 @@ export function AgentGarden({ agents: initialAgents }: { agents: DocumentAgent[]
                 agent={agent}
                 index={index}
                 gardenRef={gardenRef}
+                cannonRef={cannonRef}
+                onCannonArm={setCannonArmed}
+                onCannonFire={() => setBlastKey((value) => value + 1)}
                 onSavePosition={(id, position) => patchAgent(id, { position })}
                 onRename={(id, name) => patchAgent(id, { name })}
                 onRemove={removeAgent}
               />
             ))}
+            <div ref={cannonRef} className="pointer-events-none absolute bottom-6 left-4 z-20 hidden md:block">
+              <Cannon armed={cannonArmed} blastKey={blastKey} />
+            </div>
             <CreateAgentObject compact />
           </div>
         )}

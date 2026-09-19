@@ -5,19 +5,21 @@ import React, { useEffect, useState } from "react";
 interface MiiCharacterProps {
   isHeld: boolean;       // 길게 눌려 장갑에 잡혀있는 상태 (pressing 또는 dragging)
   docType?: string;      // 셔츠 색상 커스터마이징용
+  isWalking?: boolean;   // 실제로 걸어가는 중인지 (멈추면 다리도 멈춤)
+  isCrying?: boolean;    // 대포로 끌려갈 때 우는 표정
 }
 
-export function MiiCharacter({ isHeld, docType }: MiiCharacterProps) {
+export function MiiCharacter({ isHeld, docType, isWalking = true, isCrying = false }: MiiCharacterProps) {
 const [step, setStep] = useState(0);
 
   // 평상시 걸어다니는 다리 교차 애니메이션 타이머
   useEffect(() => {
-    if (isHeld) return;
+    if (isHeld || !isWalking) return;
     const interval = setInterval(() => {
       setStep((s) => (s + 1) % 4);
     }, 220);
     return () => clearInterval(interval);
-  }, [isHeld]);
+  }, [isHeld, isWalking]);
 
   // 서류 종류별 옷 색상 지정
   const shirtColor =
@@ -25,10 +27,11 @@ const [step, setStep] = useState(0);
     docType === "apartment_lease" ? "#e66025" :
     docType === "bank" ? "#2b7352" : "#44783e";
 
-  const legLeftAngle = !isHeld
+  const striding = !isHeld && isWalking;
+  const legLeftAngle = striding
     ? step === 1 ? 16 : step === 3 ? -16 : 0
     : 0;
-  const legRightAngle = !isHeld
+  const legRightAngle = striding
     ? step === 1 ? -16 : step === 3 ? 16 : 0
     : 0;
 
@@ -60,7 +63,7 @@ const [step, setStep] = useState(0);
       {/* 2. 잡혔을 때 머리 위에 뜨는 말풍선 */}
       {isHeld && (
         <div className="absolute -top-12 -right-14 z-40 bg-white border-2 border-black rounded-2xl px-2.5 py-1 shadow-lg text-[11px] font-black text-red-600 whitespace-nowrap animate-pulse">
-          놓아줘! 💦
+          LET ME GO! 💦
           <div className="absolute left-2 -bottom-1.5 w-2 h-2 bg-white border-b-2 border-r-2 border-black rotate-45" />
         </div>
       )}
@@ -102,7 +105,7 @@ const [step, setStep] = useState(0);
             className={isHeld ? "origin-[31px_68px] animate-[miiFlailLeg_0.15s_infinite_alternate]" : ""}
             style={{
               transformOrigin: "31px 68px",
-              transform: !isHeld ? `rotate(${legLeftAngle}deg)` : undefined,
+              transform: striding ? `rotate(${legLeftAngle}deg)` : undefined,
               transition: "transform 0.15s ease",
             }}
           >
@@ -115,7 +118,7 @@ const [step, setStep] = useState(0);
             className={isHeld ? "origin-[45px_68px] animate-[miiFlailLeg_0.13s_infinite_alternate-reverse]" : ""}
             style={{
               transformOrigin: "45px 68px",
-              transform: !isHeld ? `rotate(${legRightAngle}deg)` : undefined,
+              transform: striding ? `rotate(${legRightAngle}deg)` : undefined,
               transition: "transform 0.15s ease",
             }}
           >
@@ -166,6 +169,22 @@ const [step, setStep] = useState(0);
                 <path d="M33 38 Q38 34 43 38" stroke="#222" strokeWidth="2" fill="none" strokeLinecap="round" />
                 {/* 파란 식은땀 */}
                 <path d="M49 19 Q52 16 52 23 Q52 25 49 25 Q47 25 47 23 Q47 20 49 19 Z" fill="#60a5fa" />
+              </>
+            ) : isCrying ? (
+              <>
+                {/* 울고 있는 눈 (아래로 처진 눈썹 + 눈물) */}
+                <path d="M27 23 Q32 26 36 24" stroke="#222" strokeWidth="2" fill="none" strokeLinecap="round" />
+                <path d="M49 23 Q44 26 40 24" stroke="#222" strokeWidth="2" fill="none" strokeLinecap="round" />
+                <ellipse cx="32" cy="29" rx="2.5" ry="3" fill="#222" />
+                <ellipse cx="44" cy="29" rx="2.5" ry="3" fill="#222" />
+                {/* 흐르는 눈물 두 줄기 */}
+                <path d="M31 32 Q30 37 31 41 Q32 37 31 32 Z" fill="#60a5fa" opacity="0.9" />
+                <path d="M45 32 Q46 37 45 41 Q44 37 45 32 Z" fill="#60a5fa" opacity="0.9" />
+                {/* 떨어지는 눈물방울 */}
+                <circle cx="31" cy="41" r="2" fill="#60a5fa" className="[animation:agentTear_0.7s_linear_infinite]" />
+                <circle cx="45" cy="41" r="2" fill="#60a5fa" className="[animation:agentTear_0.7s_0.35s_linear_infinite]" />
+                {/* 우는 입 */}
+                <ellipse cx="38" cy="38" rx="4" ry="3" fill="#7f1d1d" stroke="#222" strokeWidth="1.8" />
               </>
             ) : (
               <>

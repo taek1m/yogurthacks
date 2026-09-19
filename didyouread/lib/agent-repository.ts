@@ -4,6 +4,7 @@ import type {
   AgentMessage,
   AgentSearchResult,
   DocumentAgent,
+  DocumentPage,
   StoredDocumentAgent,
   GardenPosition,
 } from "@/types/agent";
@@ -70,6 +71,22 @@ export async function getAgent(
 ): Promise<DocumentAgent | null> {
   const agent = await getStoredAgent(ownerId, id);
   return agent ? publicAgent(agent) : null;
+}
+
+/**
+ * The agent plus its extracted page text, for the highlighted document view.
+ * Pages are rebuilt field by field so no Mongo internals reach the client.
+ */
+export async function getAgentWithPages(
+  ownerId: string,
+  id: string,
+): Promise<{ agent: DocumentAgent; pages: DocumentPage[] } | null> {
+  const stored = await getStoredAgent(ownerId, id);
+  if (!stored) return null;
+  return {
+    agent: publicAgent(stored),
+    pages: (stored.extractedPages ?? []).map((page) => ({ page: page.page, text: page.text })),
+  };
 }
 
 export async function createAgent(agent: StoredDocumentAgent): Promise<DocumentAgent> {
