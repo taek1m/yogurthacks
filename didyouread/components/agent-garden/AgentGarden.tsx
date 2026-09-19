@@ -1,0 +1,80 @@
+"use client";
+
+import { Cloud, Sprout } from "lucide-react";
+import { useRef, useState } from "react";
+import { AgentObject } from "@/components/agent-garden/AgentObject";
+import { CreateAgentObject } from "@/components/agent-garden/CreateAgentObject";
+import type { DocumentAgent, GardenPosition } from "@/types/agent";
+
+export function AgentGarden({ agents: initialAgents }: { agents: DocumentAgent[] }) {
+  const [agents, setAgents] = useState(initialAgents);
+  const gardenRef = useRef<HTMLDivElement>(null);
+  const empty = agents.length === 0;
+
+  async function patchAgent(id: string, updates: { name?: string; position?: GardenPosition }) {
+    const response = await fetch(`/api/agents/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updates),
+    });
+    const result = (await response.json()) as { agent?: DocumentAgent; error?: string };
+    if (!response.ok || !result.agent) throw new Error(result.error || "Agent could not be updated");
+    setAgents((current) => current.map((agent) => agent.id === id ? result.agent! : agent));
+    window.dispatchEvent(new Event("agent-garden:changed"));
+  }
+
+  async function removeAgent(id: string) {
+    const response = await fetch(`/api/agents/${id}`, { method: "DELETE" });
+    if (!response.ok) {
+      const result = (await response.json()) as { error?: string };
+      throw new Error(result.error || "Agent could not be removed");
+    }
+    setAgents((current) => current.filter((agent) => agent.id !== id));
+    window.dispatchEvent(new Event("agent-garden:changed"));
+  }
+  return (
+    <section className="relative flex min-h-[calc(100vh-4rem)] flex-1 flex-col overflow-hidden bg-[#dff1f7]" aria-labelledby="garden-title">
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-[42%] overflow-hidden">
+        <Cloud className="absolute left-[8%] top-12 text-white/80" size={54} fill="currentColor" strokeWidth={1} />
+        <Cloud className="absolute right-[12%] top-20 text-white/70" size={72} fill="currentColor" strokeWidth={1} />
+      </div>
+      <div className="relative z-10 mx-auto flex w-full max-w-[1500px] items-end justify-between px-5 pb-5 pt-6 sm:px-8">
+        <div>
+          <p className="text-xs font-bold uppercase text-[#386a4b]">Your workspace</p>
+          <h1 id="garden-title" className="font-display text-3xl font-semibold text-[#173c28] sm:text-4xl">Agent Garden</h1>
+        </div>
+        {!empty && <p className="hidden text-sm font-medium text-[#3d6850] sm:block">{agents.length} agent{agents.length === 1 ? "" : "s"} growing</p>}
+      </div>
+
+      <div className="relative flex flex-1 items-stretch">
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[88%] rounded-t-[50%_12%] bg-[#7ebd70]" />
+        <div className="pointer-events-none absolute inset-x-[-5%] bottom-0 h-[65%] rounded-t-[48%_18%] bg-[#5ca857]" />
+        <div className="pointer-events-none absolute inset-x-[-5%] bottom-0 h-[35%] bg-[#438b49]" />
+
+        {empty ? (
+          <div className="relative z-10 mx-auto flex max-w-xl flex-1 flex-col items-center justify-center px-6 pb-24 text-center">
+            <span className="mb-5 grid size-20 place-items-center rounded-full bg-[#fffbea] text-[#32754a] shadow-lg ring-4 ring-white/40"><Sprout size={40} /></span>
+            <h2 className="font-display text-3xl font-semibold text-[#143923] sm:text-4xl">Your document agents live here</h2>
+            <p className="mt-3 max-w-md text-sm leading-6 text-[#214b31] sm:text-base">Create an agent from a topic, or upload a PDF for document-specific analysis. Every conversation is saved to its own garden object.</p>
+            <div className="mt-7"><CreateAgentObject /></div>
+          </div>
+        ) : (
+          <div ref={gardenRef} className="relative z-10 mx-auto grid w-full max-w-[1500px] grid-cols-2 content-start gap-x-4 gap-y-10 px-5 pb-16 pt-16 sm:grid-cols-3 sm:px-8 md:block md:min-h-[650px] md:pt-0">
+            {agents.map((agent, index) => (
+              <AgentObject
+                key={agent.id}
+                agent={agent}
+                index={index}
+                gardenRef={gardenRef}
+                onSavePosition={(id, position) => patchAgent(id, { position })}
+                onRename={(id, name) => patchAgent(id, { name })}
+                onRemove={removeAgent}
+              />
+            ))}
+            <CreateAgentObject compact />
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
