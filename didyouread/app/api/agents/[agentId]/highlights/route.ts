@@ -70,7 +70,7 @@ export async function DELETE(_request: Request, { params }: { params: Promise<{ 
     const { agentId } = await params;
     const agent = await clearHighlightOverrides(ownerId, agentId);
     if (!agent) return Response.json({ error: "Agent not found" }, { status: 404 });
-    return Response.json({ highlightOverrides: {}, hiddenPages: [] });
+    return Response.json({ highlightOverrides: {}, readerHighlights: [], hiddenPages: [] });
   } catch (error) {
     return authErrorResponse(error) ?? Response.json({ error: "Could not restore the highlights" }, { status: 500 });
   }

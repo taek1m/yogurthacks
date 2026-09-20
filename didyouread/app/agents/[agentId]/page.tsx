@@ -23,7 +23,7 @@ export default async function AgentPage({
   // Topic agents have no source document, so the chat takes the full width.
   const highlighted =
     agent.sourceKind !== "topic" && pages.some((page) => page.text.length > 0)
-      ? buildHighlightedDocument(pages, agent.analysis)
+      ? buildHighlightedDocument(pages, agent.analysis, agent.readerHighlights)
       : null;
 
   return (
@@ -35,6 +35,7 @@ export default async function AgentPage({
       documentNames={agent.documentNames}
       highlightOverrides={agent.highlightOverrides}
       hiddenPages={agent.hiddenPages}
+      hiddenPageAt={agent.hiddenPageAt}
     />
   );
 }

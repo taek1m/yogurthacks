@@ -107,7 +107,8 @@ export function AgentGarden({ agents: initialAgents }: { agents: DocumentAgent[]
         {!empty && <p className="hidden text-sm font-medium text-[#3d6850] sm:block">{agents.length} agent{agents.length === 1 ? "" : "s"} growing</p>}
       </div>
 
-      <div className="relative flex flex-1 items-stretch">
+      {/* isolate: raising one agent above the others must not lift it over the header. */}
+      <div className="relative isolate flex flex-1 items-stretch">
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[88%] rounded-t-[50%_12%] bg-[#7ebd70]" />
         <div className="pointer-events-none absolute inset-x-[-5%] bottom-0 h-[65%] rounded-t-[48%_18%] bg-[#5ca857]" />
         <div className="pointer-events-none absolute inset-x-[-5%] bottom-0 h-[35%] bg-[#438b49]" />

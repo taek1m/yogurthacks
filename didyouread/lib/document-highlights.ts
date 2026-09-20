@@ -3,11 +3,15 @@ import type {
   DocumentPage,
   Finding,
   FindingSeverity,
+  HighlightColor,
   HighlightKind,
+  ReaderHighlight,
 } from "@/types/agent";
 
 export interface HighlightMark {
   findingId: string;
+  /** True when the reader asked for this one in the chat. */
+  fromReader?: boolean;
   /** Stable across re-analysis, unlike findingId, so reader edits survive. */
   key: string;
   kind: HighlightKind;
@@ -17,6 +21,12 @@ export interface HighlightMark {
   /** The sentence itself, so an edit can be named in the history list. */
   quote: string;
   date?: string;
+  /** A colour of the reader's own, which replaces the category colour. */
+  color?: HighlightColor;
+  /** What that colour means here, shown in place of the category name. */
+  label?: string;
+  /** When a reader's own highlight was made, for ordering the history. */
+  createdAt?: string;
 }
 
 export interface PageSegment {
@@ -80,7 +90,8 @@ function normalize(text: string): { value: string; map: number[] } {
   return { value: chars.join(""), map };
 }
 
-function normalizeQuote(quote: string): string {
+/** Collapses a quote the way highlightKey does, for comparing two of them. */
+export function normalizeQuote(quote: string): string {
   return quote.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
@@ -123,15 +134,93 @@ function locate(
   return null;
 }
 
+/**
+ * Grows a match out to the sentence around it. A quote asked for in the chat is
+ * rarely a perfect copy, and only the opening words may match; highlighting
+ * half a sentence looks like a mistake, so take the whole one.
+ */
+function snapToSentence(text: string, start: number, end: number): { start: number; end: number } {
+  const isStop = (char: string) => char === "." || char === "!" || char === "?" || char === "\n";
+  let from = start;
+  while (from > 0 && !isStop(text[from - 1])) from -= 1;
+  while (from < end && /\s/.test(text[from])) from += 1;
+  let to = end;
+  while (to < text.length && !isStop(text[to])) to += 1;
+  if (to < text.length && text[to] !== "\n") to += 1;
+  // A run without punctuation would swallow the page; keep the plain match then.
+  return to - from > 400 ? { start, end } : { start: from, end: to };
+}
+
+/**
+ * Finds a quote in the document and returns the text exactly as it is written
+ * there. A reader (or the agent answering them) rarely copies a sentence
+ * character for character, and a highlight keyed on a near-miss would never
+ * line up with the same sentence again.
+ */
+export function findQuoteInPages(
+  pages: DocumentPage[],
+  quote: string,
+): { page: number; text: string } | null {
+  for (const page of pages) {
+    const range = locate(normalize(page.text), quote);
+    if (!range) continue;
+    const sentence = snapToSentence(page.text, range.start, range.end);
+    return { page: page.page, text: page.text.slice(sentence.start, sentence.end).trim() };
+  }
+  return null;
+}
+
 export function buildHighlightedDocument(
   pages: DocumentPage[],
   analysis: AgentAnalysis,
+  readerHighlights: ReaderHighlight[] = [],
 ): HighlightedDocument {
   const normalizedPages = new Map(pages.map((page) => [page.page, normalize(page.text)]));
   const spans = new Map<number, Array<{ start: number; end: number; mark: HighlightMark }>>();
   const marks: HighlightMark[] = [];
   const counts: Record<HighlightKind, number> = { concern: 0, deadline: 0, financial: 0, favorable: 0 };
   let unmatched = 0;
+
+  /** Claims a span on the page that holds this quote. Returns false when it is unplaceable. */
+  function place(quote: string, mark: HighlightMark, preferredPage?: number): boolean {
+    const searchOrder = preferredPage
+      ? [preferredPage, ...pages.map((page) => page.page).filter((page) => page !== preferredPage)]
+      : pages.map((page) => page.page);
+    for (const pageNumber of searchOrder) {
+      const normalized = normalizedPages.get(pageNumber);
+      if (!normalized) continue;
+      const range = locate(normalized, quote);
+      if (!range) continue;
+      const pageSpans = spans.get(pageNumber) ?? [];
+      // Skip anything already claimed by a higher-priority highlight.
+      if (pageSpans.some((span) => range.start < span.end && span.start < range.end)) return true;
+      pageSpans.push({ ...range, mark });
+      spans.set(pageNumber, pageSpans);
+      return true;
+    }
+    return false;
+  }
+
+  // The reader asked for these by name, so they outrank the machine's own
+  // choices wherever the two want the same sentence.
+  for (const highlight of readerHighlights) {
+    const mark: HighlightMark = {
+      findingId: highlight.key,
+      fromReader: true,
+      key: highlight.key,
+      kind: highlight.kind,
+      severity: highlight.severity,
+      title: highlight.title,
+      detail: highlight.detail ?? "You asked for this highlight in the chat.",
+      quote: highlight.quote,
+      color: highlight.color,
+      label: highlight.label,
+      createdAt: highlight.createdAt,
+    };
+    counts[highlight.kind] += 1;
+    if (!place(highlight.quote, mark)) unmatched += 1;
+    marks.push(mark);
+  }
 
   const byKind = findingsByKind(analysis);
   for (const kind of KIND_ORDER) {
@@ -149,27 +238,7 @@ export function buildHighlightedDocument(
       counts[kind] += 1;
 
       // A finding records the page it came from; fall back to scanning every page.
-      const searchOrder = finding.page
-        ? [finding.page, ...pages.map((page) => page.page).filter((page) => page !== finding.page)]
-        : pages.map((page) => page.page);
-      let placed = false;
-      for (const pageNumber of searchOrder) {
-        const normalized = normalizedPages.get(pageNumber);
-        if (!normalized) continue;
-        const range = locate(normalized, finding.quote);
-        if (!range) continue;
-        const pageSpans = spans.get(pageNumber) ?? [];
-        // Skip anything already claimed by a higher-priority finding.
-        if (pageSpans.some((span) => range.start < span.end && span.start < range.end)) {
-          placed = true;
-          break;
-        }
-        pageSpans.push({ ...range, mark });
-        spans.set(pageNumber, pageSpans);
-        placed = true;
-        break;
-      }
-      if (!placed) unmatched += 1;
+      if (!place(finding.quote, mark, finding.page ?? undefined)) unmatched += 1;
       marks.push(mark);
     }
   }

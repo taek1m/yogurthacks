@@ -1,3 +1,4 @@
+import { HIGHLIGHT_CATEGORIES, type HighlightCommand } from "@/lib/highlight-commands";
 import type { StoredDocumentAgent, DocumentType } from "@/types/agent";
 
 const documentTypes: DocumentType[] = [
@@ -283,6 +284,8 @@ export interface AgentReply {
   reply: string;
   /** Only filled when the reader asked for something to be put on their list. */
   todos: Array<{ title: string; detail?: string; dueDate?: string }>;
+  /** Only filled when the reader asked for the marked-up document to change. */
+  highlights: HighlightCommand[];
 }
 
 export async function generateAgentReply(
@@ -318,12 +321,41 @@ export async function generateAgentReply(
           required: ["title"],
         },
       },
+      highlights: {
+        type: "array",
+        description:
+          "Changes to the marked-up document on the right. Empty unless the reader asked you to highlight, colour, rename, or unhighlight something.",
+        items: {
+          type: "object",
+          properties: {
+            action: {
+              type: "string",
+              enum: ["add", "change", "remove"],
+              description:
+                "add: mark a passage that is not marked yet. change: recolour or rename one that is. remove: take a highlight away.",
+            },
+            quote: {
+              type: "string",
+              description:
+                "The sentence to mark, copied WORD FOR WORD from the document text above. Never paraphrase, shorten, translate, or invent it.",
+            },
+            category: {
+              type: "string",
+              enum: [...HIGHLIGHT_CATEGORIES],
+              description:
+                "The colour: red_flag (Red flags), concern (Review closely), deadline (Deadlines), financial (Money), favorable (In your favor).",
+            },
+            title: { type: "string", description: "Short name for the highlight, maximum 60 characters" },
+          },
+          required: ["action", "quote"],
+        },
+      },
     },
-    required: ["reply", "todos"],
+    required: ["reply", "todos", "highlights"],
   };
 
   const text = await requestGemini(
-    `You are ${agent.name}, a persistent assistant dedicated to one saved session. ${sourceContext}\nAnswer clearly and concisely. For topic-only agents, provide general educational guidance and say when a specific agreement is needed. For document agents, ground factual claims in the supplied text and cite page numbers. Never make unsupported legal conclusions; say "Needs confirmation" when evidence is insufficient.\n\nFormatting rules: this response is displayed as plain text with no markdown rendering. Never use asterisks or bold markers. When listing multiple points, you MUST put an actual newline character between each one — never write them back-to-back on the same line separated only by spaces. Follow this exact pattern, copying the blank lines between items:\n\nOpening sentence introducing the list.\n\n- First point here (Page 1, Section A).\n\n- Second point here (Page 2, Section B).\n\n- Third point here (Page 3, Section C).\n\nDo not compress this into a single paragraph. Each dash point must start on its own new line with a blank line before it.` + `\n\nToday is ${new Date().toISOString().slice(0, 10)}. Fill "todos" only when the reader asks you to add, track, remember, or be reminded of something; otherwise return an empty array. Put the answer itself in "reply".`,
+    `You are ${agent.name}, a persistent assistant dedicated to one saved session. ${sourceContext}\nAnswer clearly and concisely. For topic-only agents, provide general educational guidance and say when a specific agreement is needed. For document agents, ground factual claims in the supplied text and cite page numbers. Never make unsupported legal conclusions; say "Needs confirmation" when evidence is insufficient.\n\nFormatting rules: this response is displayed as plain text with no markdown rendering. Never use asterisks or bold markers. When listing multiple points, you MUST put an actual newline character between each one — never write them back-to-back on the same line separated only by spaces. Follow this exact pattern, copying the blank lines between items:\n\nOpening sentence introducing the list.\n\n- First point here (Page 1, Section A).\n\n- Second point here (Page 2, Section B).\n\n- Third point here (Page 3, Section C).\n\nDo not compress this into a single paragraph. Each dash point must start on its own new line with a blank line before it.` + `\n\nToday is ${new Date().toISOString().slice(0, 10)}. Fill "todos" only when the reader asks you to add, track, remember, or be reminded of something; otherwise return an empty array.\n\nThe reader is also looking at a marked-up copy of this document, where passages are highlighted in five colours: red_flag (Red flags), concern (Review closely), deadline (Deadlines), financial (Money), favorable (In your favor). Fill "highlights" only when they ask you to change it — to highlight a passage, recolour one, rename one, or take one away. Every quote you put there must be copied word for word from the document text above, because a sentence that is not in the document cannot be highlighted. When they name a part rather than a sentence ("the arbitration clause"), find the sentence yourself and quote that. Say in "reply" what you marked and in which colour. Put the answer itself in "reply".`,
     [...history, { role: "user", parts: [{ text: question }] }],
     { responseMimeType: "application/json", responseSchema: schema },
   );
@@ -333,6 +365,20 @@ export async function generateAgentReply(
     if (typeof parsed.reply !== "string" || !parsed.reply.trim()) throw new Error("No reply");
     return {
       reply: parsed.reply.trim(),
+      highlights: (Array.isArray(parsed.highlights) ? parsed.highlights : [])
+        .filter(
+          (command): command is HighlightCommand =>
+            typeof command?.quote === "string" &&
+            command.quote.trim().length > 0 &&
+            ["add", "change", "remove"].includes(command.action),
+        )
+        .slice(0, 12)
+        .map((command) => ({
+          action: command.action,
+          quote: command.quote.trim().slice(0, 600),
+          category: HIGHLIGHT_CATEGORIES.includes(command.category!) ? command.category : undefined,
+          title: typeof command.title === "string" ? command.title.trim().slice(0, 120) : undefined,
+        })),
       todos: (Array.isArray(parsed.todos) ? parsed.todos : [])
         .filter((todo): todo is AgentReply["todos"][number] => typeof todo?.title === "string" && todo.title.trim().length > 0)
         .slice(0, 8)
@@ -344,7 +390,7 @@ export async function generateAgentReply(
     };
   } catch {
     // Structured output is a nicety; a plain answer is still worth showing.
-    return { reply: text, todos: [] };
+    return { reply: text, todos: [], highlights: [] };
   }
 }
 

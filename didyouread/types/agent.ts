@@ -28,11 +28,43 @@ export interface Finding {
 /** Which analysis section a finding came from. Drives its highlight colour. */
 export type HighlightKind = "concern" | "deadline" | "financial" | "favorable";
 
+/**
+ * A colour outside the five analysis categories, for passages the reader marks
+ * for reasons of their own.
+ */
+export type HighlightColor = "grey" | "purple" | "pink" | "teal" | "indigo" | "brown" | "lime" | "aqua";
+
 /** A reader's correction to one machine-made highlight. */
 export interface HighlightOverride {
   kind?: HighlightKind;
   severity?: FindingSeverity;
   removed?: boolean;
+  /** A name the reader gave it, replacing the one the analysis wrote. */
+  title?: string;
+  /** Set when the reader chose a colour of their own over the five categories. */
+  color?: HighlightColor;
+  /** What that colour means here, shown in place of the category name. */
+  label?: string;
+  /** When the change was made, so the history can lead with the newest. */
+  at?: string;
+}
+
+/**
+ * A highlight the analysis never made, asked for in the chat. It is located in
+ * the document by its quote, exactly as the machine-made ones are.
+ */
+export interface ReaderHighlight {
+  key: string;
+  quote: string;
+  kind: HighlightKind;
+  severity: FindingSeverity;
+  title: string;
+  detail?: string;
+  createdAt: string;
+  /** A colour of the reader's own, instead of the kind above. */
+  color?: HighlightColor;
+  /** What that colour means here, for example "Chapter titles". */
+  label?: string;
 }
 
 export interface DocumentPage {
@@ -101,6 +133,10 @@ export interface DocumentAgent {
   highlightOverrides?: Record<string, HighlightOverride>;
   /** Pages the reader deleted from the marked-up view. Undoable from History. */
   hiddenPages?: number[];
+  /** When each of those pages was deleted, keyed by page number. */
+  hiddenPageAt?: Record<string, string>;
+  /** Highlights the reader asked for in the chat, on top of the analysis. */
+  readerHighlights?: ReaderHighlight[];
   sourceKind?: "pdf" | "topic";
   topic?: string;
   documentType: DocumentType;

@@ -4,6 +4,7 @@ import type {
   AgentAnalysis,
   AgentMessage,
   HighlightOverride,
+  ReaderHighlight,
   AgentTask,
   AgentSearchResult,
   DocumentAgent,
@@ -315,7 +316,7 @@ export async function setHighlightOverride(
     const agent = memory.find((item) => item.ownerId === ownerId && item.id === id);
     if (!agent) return null;
     const all = { ...(agent.highlightOverrides ?? {}) };
-    if (override) all[key] = override;
+    if (override) all[key] = { ...override, at: updatedAt };
     else delete all[key];
     agent.highlightOverrides = all;
     agent.updatedAt = updatedAt;
@@ -325,8 +326,37 @@ export async function setHighlightOverride(
   const result = await (await collection()).findOneAndUpdate(
     { ownerId, id },
     override
-      ? { $set: { [field]: override, updatedAt } }
+      ? { $set: { [field]: { ...override, at: updatedAt }, updatedAt } }
       : { $unset: { [field]: "" }, $set: { updatedAt } },
+    { returnDocument: "after" },
+  );
+  return result ? publicAgent(result) : null;
+}
+
+/**
+ * Saves the whole marked-up view at once, after the agent carried out highlight
+ * changes the reader asked for in the chat. Both sides are written together so
+ * a new highlight and the override that colours it can never land apart.
+ */
+export async function saveHighlightEdits(
+  ownerId: string,
+  id: string,
+  edits: { highlightOverrides: Record<string, HighlightOverride>; readerHighlights: ReaderHighlight[] },
+): Promise<DocumentAgent | null> {
+  const updatedAt = new Date().toISOString();
+
+  if (!isMongoConfigured()) {
+    const agent = memory.find((item) => item.ownerId === ownerId && item.id === id);
+    if (!agent) return null;
+    agent.highlightOverrides = edits.highlightOverrides;
+    agent.readerHighlights = edits.readerHighlights;
+    agent.updatedAt = updatedAt;
+    return publicAgent(agent);
+  }
+
+  const result = await (await collection()).findOneAndUpdate(
+    { ownerId, id },
+    { $set: { ...edits, updatedAt } },
     { returnDocument: "after" },
   );
   return result ? publicAgent(result) : null;
@@ -349,9 +379,16 @@ export async function setPageHidden(
     const agent = memory.find((item) => item.ownerId === ownerId && item.id === id);
     if (!agent) return null;
     const pages = new Set(agent.hiddenPages ?? []);
-    if (hidden) pages.add(page);
-    else pages.delete(page);
+    const at = { ...(agent.hiddenPageAt ?? {}) };
+    if (hidden) {
+      pages.add(page);
+      at[String(page)] = updatedAt;
+    } else {
+      pages.delete(page);
+      delete at[String(page)];
+    }
     agent.hiddenPages = [...pages].sort((a, b) => a - b);
+    agent.hiddenPageAt = at;
     agent.updatedAt = updatedAt;
     return publicAgent(agent);
   }
@@ -359,8 +396,8 @@ export async function setPageHidden(
   const result = await (await collection()).findOneAndUpdate(
     { ownerId, id },
     hidden
-      ? { $addToSet: { hiddenPages: page }, $set: { updatedAt } }
-      : { $pull: { hiddenPages: page }, $set: { updatedAt } },
+      ? { $addToSet: { hiddenPages: page }, $set: { [`hiddenPageAt.${page}`]: updatedAt, updatedAt } }
+      : { $pull: { hiddenPages: page }, $unset: { [`hiddenPageAt.${page}`]: "" }, $set: { updatedAt } },
     { returnDocument: "after" },
   );
   return result ? publicAgent(result) : null;
@@ -377,14 +414,16 @@ export async function clearHighlightOverrides(
     const agent = memory.find((item) => item.ownerId === ownerId && item.id === id);
     if (!agent) return null;
     agent.highlightOverrides = {};
+    agent.readerHighlights = [];
     agent.hiddenPages = [];
+    agent.hiddenPageAt = {};
     agent.updatedAt = updatedAt;
     return publicAgent(agent);
   }
 
   const result = await (await collection()).findOneAndUpdate(
     { ownerId, id },
-    { $set: { highlightOverrides: {}, hiddenPages: [], updatedAt } },
+    { $set: { highlightOverrides: {}, readerHighlights: [], hiddenPages: [], hiddenPageAt: {}, updatedAt } },
     { returnDocument: "after" },
   );
   return result ? publicAgent(result) : null;

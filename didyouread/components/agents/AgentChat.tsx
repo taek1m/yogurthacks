@@ -1,6 +1,6 @@
 "use client";
 
-import { Camera, FileText, LoaderCircle, Paperclip, Send, Sparkles, Upload } from "lucide-react";
+import { Camera, FileText, LoaderCircle, Paperclip, Send, Sparkles, Upload, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { AgentSummary } from "@/components/agents/AgentSummary";
@@ -22,6 +22,9 @@ export function AgentChat({ agent, highlightedMessage }: { agent: DocumentAgent;
   const [error, setError] = useState("");
   const [documentNames, setDocumentNames] = useState(agent.documentNames ?? [agent.documentName]);
   const [attaching, setAttaching] = useState(false);
+  // Photos wait here so a phone camera, which only ever returns one shot, can
+  // build up a whole agreement before any of it is sent.
+  const [photos, setPhotos] = useState<File[]>([]);
   const [dropping, setDropping] = useState(false);
   const stream = useRef<HTMLDivElement>(null);
   // dragenter/dragleave also fire for children, so count them instead of toggling.
@@ -79,32 +82,39 @@ export function AgentChat({ agent, highlightedMessage }: { agent: DocumentAgent;
     dragDepth.current = 0;
     setDropping(false);
     if (attaching) return;
-    void attach(Array.from(event.dataTransfer.files));
+    receive(Array.from(event.dataTransfer.files));
   }
 
-  /** Keeps one PDF, or a run of photographed pages that become one document. */
-  function pickFiles(picked: File[]): File[] | null {
+  /**
+   * A PDF is sent straight away; photos collect in the tray instead, so page two
+   * can be taken before page one is read.
+   */
+  function receive(picked: File[]) {
     const supported = picked.filter(isSupportedUpload);
     if (supported.length === 0) {
       setError(picked.length ? UNSUPPORTED_UPLOAD_MESSAGE : "That drop had no file in it.");
-      return null;
+      return;
     }
     const pdf = supported.find(isPdfFile);
     if (pdf) {
       setError(supported.length > 1 ? "A PDF is read on its own, so only that file was added." : "");
-      return [pdf];
+      void attach([pdf]);
+      return;
     }
-    const photos = supported.filter(isPhotoFile).slice(0, MAX_PHOTOS);
-    setError(
-      supported.length > photos.length ? `Up to ${MAX_PHOTOS} photos can be read at once.` : "",
-    );
-    return photos;
+    setPhotos((current) => {
+      const fresh = supported
+        .filter(isPhotoFile)
+        // The same shot picked twice would become two identical pages.
+        .filter((photo) => !current.some((held) => held.name === photo.name && held.size === photo.size));
+      const merged = [...current, ...fresh];
+      setError(merged.length > MAX_PHOTOS ? `Up to ${MAX_PHOTOS} photos can be read at once.` : "");
+      return merged.slice(0, MAX_PHOTOS);
+    });
   }
 
   /** Attaches another PDF, or photographed pages, so this agent answers from it too. */
-  async function attach(picked: File[]) {
-    const files = pickFiles(picked);
-    if (!files) return;
+  async function attach(files: File[]) {
+    if (files.length === 0) return;
     setAttaching(true);
     const body = new FormData();
     for (const file of files) body.append("document", file);
@@ -114,6 +124,7 @@ export function AgentChat({ agent, highlightedMessage }: { agent: DocumentAgent;
       if (!response.ok || !result.agent || !result.message) throw new Error(result.error || "The document could not be added");
       setMessages((current) => [...current, result.message!]);
       setDocumentNames(result.agent.documentNames ?? [result.agent.documentName]);
+      setPhotos([]);
       window.dispatchEvent(new Event("agent-garden:changed"));
       // Repaint the marked-up panel, which is rendered on the server.
       router.refresh();
@@ -158,12 +169,19 @@ export function AgentChat({ agent, highlightedMessage }: { agent: DocumentAgent;
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content }),
       });
-      const result = (await response.json()) as { messages?: AgentMessage[]; todos?: unknown[]; error?: string };
+      const result = (await response.json()) as {
+        messages?: AgentMessage[];
+        todos?: unknown[];
+        highlightsChanged?: boolean;
+        error?: string;
+      };
       if (!response.ok || !result.messages) throw new Error(result.error || "Message failed");
       // Swap the local copy for the saved pair, which carries the real ids.
       setMessages((current) => [...current.filter((message) => message.id !== pendingId), ...result.messages!]);
       // The agent may have put something on the reader's list while answering.
       if (result.todos?.length) notifyTodosChanged();
+      // It may also have changed the marked-up panel, which the server renders.
+      if (result.highlightsChanged) router.refresh();
       window.setTimeout(() => scrollToLatest(), 50);
     } catch (sendError) {
       setMessages((current) => current.filter((message) => message.id !== pendingId));
@@ -236,6 +254,57 @@ export function AgentChat({ agent, highlightedMessage }: { agent: DocumentAgent;
       </div>
 
       <form onSubmit={ask} className="sticky bottom-0 border-t border-[#dce5d9] bg-[#fffef9] p-4 sm:px-8">
+        {photos.length > 0 && (
+          <div className="mb-2 rounded-md border border-[#cddbc9] bg-[#f4f9f2] p-2.5">
+            <p className="text-xs font-bold text-[#2d5640]">
+              {photos.length} photo{photos.length === 1 ? "" : "s"} ready · they become one document
+            </p>
+            <ul className="mt-1.5 space-y-1">
+              {photos.map((photo, index) => (
+                <li key={`${photo.name}-${photo.size}`} className="flex items-center gap-2 text-xs">
+                  <span className="font-bold text-[#4b765a]">Page {index + 1}</span>
+                  <span className="min-w-0 flex-1 truncate text-[#33513f]">{photo.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => setPhotos((current) => current.filter((held) => held !== photo))}
+                    aria-label={`Remove ${photo.name}`}
+                    className="shrink-0 rounded p-0.5 text-[#8f2f23] hover:bg-[#fbe6e2]"
+                  >
+                    <X size={14} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={attaching}
+                onClick={() => void attach(photos)}
+                className="inline-flex items-center gap-1.5 rounded-md bg-[#225f3b] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#184b2d] disabled:opacity-50"
+              >
+                {attaching ? <LoaderCircle size={14} className="animate-spin" /> : <Camera size={14} />}
+                {attaching ? "Reading the photos..." : `Add ${photos.length} photo${photos.length === 1 ? "" : "s"}`}
+              </button>
+              <button
+                type="button"
+                disabled={attaching}
+                onClick={() => cameraPicker.current?.click()}
+                className="inline-flex items-center gap-1.5 rounded-md border border-[#c6d4c3] bg-white px-3 py-1.5 text-xs font-semibold text-[#2d5640] hover:bg-[#eef6ec] disabled:opacity-50"
+              >
+                <Camera size={14} />
+                Take another
+              </button>
+              <button
+                type="button"
+                disabled={attaching}
+                onClick={() => { setPhotos([]); setError(""); }}
+                className="inline-flex items-center rounded-md px-2 py-1.5 text-xs font-semibold text-[#8f2f23] hover:underline disabled:opacity-50"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+        )}
         <label className="sr-only" htmlFor="agent-question">Ask this agent a question</label>
         <div
           className={`relative flex items-end gap-2 rounded-lg border p-2 shadow-sm transition ${
@@ -259,7 +328,7 @@ export function AgentChat({ agent, highlightedMessage }: { agent: DocumentAgent;
             onChange={(event) => {
               const picked = Array.from(event.target.files ?? []);
               event.target.value = "";
-              if (picked.length) void attach(picked);
+              if (picked.length) receive(picked);
             }}
           />
           <input
@@ -271,7 +340,7 @@ export function AgentChat({ agent, highlightedMessage }: { agent: DocumentAgent;
             onChange={(event) => {
               const picked = Array.from(event.target.files ?? []);
               event.target.value = "";
-              if (picked.length) void attach(picked);
+              if (picked.length) receive(picked);
             }}
           />
           <button
@@ -288,8 +357,8 @@ export function AgentChat({ agent, highlightedMessage }: { agent: DocumentAgent;
             type="button"
             onClick={() => cameraPicker.current?.click()}
             disabled={attaching}
-            title="Photograph a page and add it to this agent"
-            aria-label="Photograph a page and add it to this agent"
+            title={photos.length ? "Photograph another page" : "Photograph a page and add it to this agent"}
+            aria-label={photos.length ? "Photograph another page" : "Photograph a page and add it to this agent"}
             className="grid size-10 shrink-0 place-items-center rounded-md border border-[#cad8c7] text-[#2d5640] hover:bg-[#eef6ec] disabled:opacity-40"
           >
             <Camera size={18} />

@@ -103,3 +103,31 @@ describe("agent stop, go, and deletion by cannon", () => {
     expect(screen.getByRole("button", { name: "Create a new agent" })).toBeInTheDocument();
   });
 });
+
+describe("agents that overlap", () => {
+  beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
+  afterEach(() => vi.useRealTimers());
+
+  const second: DocumentAgent = { ...agent, id: "agent-2", name: "Lease agent", documentName: "lease.pdf" };
+
+  /** The positioned wrapper is the <a>'s parent, which carries the z-index. */
+  function layerOf(name: RegExp) {
+    const link = screen.getByRole("link", { name });
+    return (link.closest("[style]") as HTMLElement).style.zIndex;
+  }
+
+  it("lifts whichever agent was touched last above the other", () => {
+    render(<AgentGarden agents={[agent, second]} />);
+
+    // Nothing is raised until one is reached for.
+    expect(layerOf(/Open Auto insurance agent/)).toBe("");
+    expect(layerOf(/Open Lease agent/)).toBe("");
+
+    fireEvent.pointerDown(screen.getByRole("link", { name: /Open Auto insurance agent/ }), { button: 0, pointerId: 1 });
+    const first = Number(layerOf(/Open Auto insurance agent/));
+    expect(first).toBeGreaterThan(0);
+
+    fireEvent.pointerDown(screen.getByRole("link", { name: /Open Lease agent/ }), { button: 0, pointerId: 2 });
+    expect(Number(layerOf(/Open Lease agent/))).toBeGreaterThan(first);
+  });
+});

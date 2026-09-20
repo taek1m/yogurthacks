@@ -1,7 +1,8 @@
-import { appendMessages, getStoredAgent } from "@/lib/agent-repository";
+import { appendMessages, getStoredAgent, saveHighlightEdits } from "@/lib/agent-repository";
 import { buildGroundedAnswer } from "@/lib/agent-utils";
 import { authErrorResponse, requireUserId } from "@/lib/auth";
 import { geminiErrorResponse, generateAgentReply } from "@/lib/gemini";
+import { applyHighlightCommands, missingQuoteNote } from "@/lib/highlight-commands";
 import { createTodos } from "@/lib/todo-repository";
 import type { AgentMessage, TodoItem } from "@/types/agent";
 
@@ -17,9 +18,21 @@ export async function POST(request: Request, { params }: { params: Promise<{ age
 
     let answer: string;
     let added: TodoItem[] = [];
+    // Says whether the marked-up panel has to be repainted after this reply.
+    let highlightsChanged = false;
     if (process.env.GEMINI_API_KEY) {
       const result = await generateAgentReply(agent, content);
       answer = result.reply;
+
+      // The reader can ask for the marked-up document to change in plain words.
+      if (result.highlights.length > 0 && agent.sourceKind !== "topic") {
+        const edits = applyHighlightCommands(agent, result.highlights);
+        if (edits.applied > 0) {
+          highlightsChanged = Boolean(await saveHighlightEdits(ownerId, agentId, edits));
+        }
+        answer += missingQuoteNote(edits.missing);
+      }
+
       // The agent can put things on the reader's list when they ask it to.
       const now = new Date().toISOString();
       added = await createTodos(
@@ -47,7 +60,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ age
       { id: crypto.randomUUID(), role: "assistant", content: answer, createdAt: new Date().toISOString() },
     ];
     await appendMessages(ownerId, agentId, messages);
-    return Response.json({ messages, todos: added });
+    return Response.json({ messages, todos: added, highlightsChanged });
   } catch (error) {
     return (
       authErrorResponse(error) ??

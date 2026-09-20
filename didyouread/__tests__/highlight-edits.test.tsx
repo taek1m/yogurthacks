@@ -202,3 +202,117 @@ describe("deleting a page", () => {
     expect(pageText().some((text) => /late fee/.test(text))).toBe(true);
   });
 });
+
+describe("a highlight the chat added", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const parking = {
+    key: highlightKey("Parking spot 14 is assigned to this unit."),
+    quote: "Parking spot 14 is assigned to this unit.",
+    kind: "favorable" as const,
+    severity: "info" as const,
+    title: "Parking spot",
+    createdAt: "2026-01-02T00:00:00.000Z",
+  };
+
+  function paintWithReaderHighlight() {
+    const withParking = [
+      { page: 1, text: `${pages[0].text}\nParking spot 14 is assigned to this unit.` },
+    ];
+    return render(
+      <DocumentHighlights
+        agentId="agent-1"
+        document={buildHighlightedDocument(withParking, analyzePages(withParking), [parking])}
+        documentName="lease.pdf"
+      />,
+    );
+  }
+
+  it("paints it, names it, and says it came from the chat", () => {
+    paintWithReaderHighlight();
+
+    const node = [...document.querySelectorAll("mark")].find((mark) => /Parking spot 14/.test(mark.textContent ?? ""));
+    expect(node).toBeTruthy();
+    fireEvent.click(node!);
+
+    expect(screen.getByRole("heading", { name: "Parking spot" })).toBeInTheDocument();
+    expect(screen.getByText("From the chat")).toBeInTheDocument();
+  });
+
+  it("lists it in the history, where it can be taken back off", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+    paintWithReaderHighlight();
+
+    fireEvent.click(screen.getByRole("button", { name: /^History/ }));
+    expect(screen.getByText(/Added from the chat/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo: Parking spot" }));
+    await waitFor(() =>
+      expect([...document.querySelectorAll("mark")].some((mark) => /Parking spot 14/.test(mark.textContent ?? ""))).toBe(false),
+    );
+  });
+});
+
+describe("the order of the history", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function historyLines() {
+    return [...document.querySelectorAll("li")]
+      .map((node) => node.querySelector("span > span")?.textContent ?? "")
+      .filter(Boolean);
+  }
+
+  it("puts the change just made at the top", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+    const twoPages = [pages[0], { page: 2, text: "A late fee of $95 applies after the fifth day." }];
+    render(
+      <DocumentHighlights
+        agentId="agent-1"
+        document={buildHighlightedDocument(twoPages, analyzePages(twoPages))}
+        documentName="lease.pdf"
+      />,
+    );
+
+    // Delete page 2 first, then recolour a highlight on page 1.
+    fireEvent.click(screen.getByRole("button", { name: "Delete page 2" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /^History \(1/ })).toBeInTheDocument());
+    clickDepositMark();
+    fireEvent.click(screen.getByRole("button", { name: "Mark as Money" }));
+
+    fireEvent.click(screen.getByRole("button", { name: /^History/ }));
+    await waitFor(() => expect(historyLines().length).toBeGreaterThan(1));
+
+    // The recolour came second, so it leads; the page deletion follows.
+    expect(historyLines()[0]).toMatch(/→ Money/);
+    expect(historyLines()[1]).toBe("Page 2 deleted");
+  });
+
+  it("leads with whichever saved change is newer", () => {
+    const twoPages = [pages[0], { page: 2, text: "A late fee of $95 applies after the fifth day." }];
+    const document2 = buildHighlightedDocument(twoPages, analyzePages(twoPages));
+
+    function paintAt(overrideAt: string, pageAt: string) {
+      return render(
+        <DocumentHighlights
+          agentId="agent-1"
+          document={document2}
+          documentName="lease.pdf"
+          // The highlight is on page 1, which stays on screen, so both show.
+          overrides={{ [depositKey]: { kind: "financial", severity: "important", at: overrideAt } }}
+          removedPages={[2]}
+          removedPageAt={{ "2": pageAt }}
+        />,
+      );
+    }
+
+    const first = paintAt("2026-01-01T00:00:00.000Z", "2026-03-01T00:00:00.000Z");
+    fireEvent.click(screen.getByRole("button", { name: /^History/ }));
+    expect(historyLines()).toEqual(["Page 2 deleted", expect.stringMatching(/→ Money/)]);
+    first.unmount();
+
+    // Same two changes, made the other way round.
+    paintAt("2026-05-01T00:00:00.000Z", "2026-03-01T00:00:00.000Z");
+    fireEvent.click(screen.getByRole("button", { name: /^History/ }));
+    expect(historyLines()).toEqual([expect.stringMatching(/→ Money/), "Page 2 deleted"]);
+  });
+});

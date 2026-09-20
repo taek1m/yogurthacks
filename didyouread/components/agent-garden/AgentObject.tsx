@@ -21,6 +21,12 @@ const BOUNDS = { minX: 8, maxX: 92, minY: 16, maxY: 86 };
 const STROLL_SPEED = 2.6; // percent per second
 const MARCH_SPEED = 17; // percent per second, walking to the cannon
 // Where a spotlighted agent flies to: clear of the hills, up in the sky band.
+/**
+ * Agents wander into each other, and the one you reach for should be the one on
+ * top. Every touch takes the next number, the way clicking a window raises it.
+ */
+let stackTop = 0;
+
 const SKY_Y_PERCENT = 16;
 const FLIGHT_MS = 1100;
 const LOAD_MS = 420; // climbing into the muzzle
@@ -69,6 +75,8 @@ export function AgentObject({
   const [walking, setWalking] = useState(true);
   const [stepping, setStepping] = useState(false);
   const [facing, setFacing] = useState(1);
+  // 0 = never touched, so the garden's own stacking still applies.
+  const [raised, setRaised] = useState(0);
   const [launch, setLaunch] = useState<LaunchPhase | null>(null);
 
   const wrap = useRef<HTMLDivElement>(null);
@@ -115,9 +123,22 @@ export function AgentObject({
 
   // Only the memoized value React knows about, so our imperative writes survive re-renders.
   const style = useMemo(
-    () => ({ "--agent-x": `${home.xPercent}%`, "--agent-y": `${home.yPercent}%` }) as CSSProperties,
-    [home],
+    () =>
+      ({
+        "--agent-x": `${home.xPercent}%`,
+        "--agent-y": `${home.yPercent}%`,
+        // Untouched agents keep the stacking the garden gave them. A spotlit one
+        // sits above every raised agent, whatever they have climbed to.
+        ...(spotlight ? { zIndex: 100000 } : raised > 0 ? { zIndex: raised } : {}),
+      }) as CSSProperties,
+    [home, raised, spotlight],
   );
+
+  /** Lifts this agent clear of the ones it overlaps. */
+  function raise() {
+    stackTop += 1;
+    setRaised(stackTop);
+  }
 
   const faceTowards = useCallback((dx: number) => {
     const next = dx === 0 ? facingRef.current : dx > 0 ? 1 : -1;
@@ -318,6 +339,9 @@ export function AgentObject({
   }, [menuOpen]);
 
   function beginDrag(event: ReactPointerEvent<HTMLAnchorElement>) {
+    // Raise on the press itself, so the one being reached for is the one on top
+    // even when the gesture turns out to be a drag, or lands on a phone.
+    if (!launching) raise();
     if (launching || spotlight) return;
     if (!window.matchMedia("(min-width: 768px)").matches || event.button !== 0) return;
     const target = event.currentTarget;
@@ -459,6 +483,7 @@ export function AgentObject({
       event.preventDefault();
       return;
     }
+    raise();
     // Keyboard activation reports no click count, and a second click opens the
     // conversation; both just follow the link.
     if (event.detail === 0 || event.detail >= 2) {
