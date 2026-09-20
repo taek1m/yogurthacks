@@ -48,7 +48,8 @@ describe("AgentGarden", () => {
     fireEvent.change(screen.getByLabelText("Agent name"), { target: { value: "My car contract" } });
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
-    await waitFor(() => expect(screen.getByText("My car contract")).toBeInTheDocument());
+    // The name now shows in the sidebar list and on the garden object.
+    await waitFor(() => expect(screen.getAllByText("My car contract").length).toBeGreaterThan(0));
     expect(fetch).toHaveBeenCalledWith("/api/agents/agent-1", expect.objectContaining({ method: "PATCH" }));
   });
 });

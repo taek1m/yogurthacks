@@ -1,8 +1,9 @@
 "use client";
 
 import { Cloud, Sprout } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AgentObject } from "@/components/agent-garden/AgentObject";
+import { AgentSidebar } from "@/components/agent-garden/AgentSidebar";
 import { Cannon } from "@/components/agent-garden/Cannon";
 import { CreateAgentObject } from "@/components/agent-garden/CreateAgentObject";
 import type { DocumentAgent, GardenPosition } from "@/types/agent";
@@ -12,6 +13,7 @@ export function AgentGarden({ agents: initialAgents }: { agents: DocumentAgent[]
   const gardenRef = useRef<HTMLDivElement>(null);
   const cannonRef = useRef<HTMLDivElement>(null);
   const [cannonArmed, setCannonArmed] = useState(false);
+  const [spotlightId, setSpotlightId] = useState<string | null>(null);
   const [blastKey, setBlastKey] = useState(0);
   const empty = agents.length === 0;
 
@@ -27,6 +29,13 @@ export function AgentGarden({ agents: initialAgents }: { agents: DocumentAgent[]
     window.dispatchEvent(new Event("agent-garden:changed"));
   }
 
+  // The spotlight is a moment, not a mode: it fades on its own.
+  useEffect(() => {
+    if (!spotlightId) return;
+    const timer = window.setTimeout(() => setSpotlightId(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [spotlightId]);
+
   async function removeAgent(id: string) {
     const response = await fetch(`/api/agents/${id}`, { method: "DELETE" });
     if (!response.ok) {
@@ -34,10 +43,19 @@ export function AgentGarden({ agents: initialAgents }: { agents: DocumentAgent[]
       throw new Error(result.error || "Agent could not be removed");
     }
     setAgents((current) => current.filter((agent) => agent.id !== id));
+    setSpotlightId((current) => (current === id ? null : current));
     window.dispatchEvent(new Event("agent-garden:changed"));
   }
   return (
-    <section className="relative flex min-h-[calc(100vh-4rem)] flex-1 flex-col overflow-hidden bg-[#dff1f7]" aria-labelledby="garden-title">
+    <div className="flex min-h-[calc(100vh-4rem)] flex-1 flex-col md:flex-row">
+      {!empty && (
+        <AgentSidebar
+          agents={agents}
+          selectedId={spotlightId}
+          onSelect={(id) => setSpotlightId(id)}
+        />
+      )}
+      <section className="relative flex min-h-[calc(100vh-4rem)] min-w-0 flex-1 flex-col overflow-hidden bg-[#dff1f7]" aria-labelledby="garden-title">
       <div className="pointer-events-none absolute inset-x-0 top-0 h-[42%] overflow-hidden">
         <Cloud className="absolute left-[8%] top-12 text-white/80" size={54} fill="currentColor" strokeWidth={1} />
         <Cloud className="absolute right-[12%] top-20 text-white/70" size={72} fill="currentColor" strokeWidth={1} />
@@ -69,6 +87,7 @@ export function AgentGarden({ agents: initialAgents }: { agents: DocumentAgent[]
                 key={agent.id}
                 agent={agent}
                 index={index}
+                spotlight={agent.id === spotlightId}
                 gardenRef={gardenRef}
                 cannonRef={cannonRef}
                 onCannonArm={setCannonArmed}
@@ -85,6 +104,7 @@ export function AgentGarden({ agents: initialAgents }: { agents: DocumentAgent[]
           </div>
         )}
       </div>
-    </section>
+      </section>
+    </div>
   );
 }

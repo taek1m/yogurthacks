@@ -17,9 +17,12 @@ interface MiiCharacterProps {
   docType?: string;      // 셔츠 색상 커스터마이징용
   isWalking?: boolean;   // 실제로 걸어가는 중인지 (멈추면 다리도 멈춤)
   isCrying?: boolean;    // 대포로 끌려갈 때 우는 표정
+  isResting?: boolean;   // 일시정지 → 바닥에 앉아서 쉬는 자세
+  hasWings?: boolean;    // 사이드바에서 선택되어 날아오르는 중
+  flipped?: boolean;     // 왼쪽을 볼 때 부모가 좌우 반전 → 글자/말풍선만 되돌림
 }
 
-export function MiiCharacter({ isHeld, docType, isWalking = true, isCrying = false }: MiiCharacterProps) {
+export function MiiCharacter({ isHeld, docType, isWalking = true, isCrying = false, isResting = false, hasWings = false, flipped = false }: MiiCharacterProps) {
 const [step, setStep] = useState(0);
 
   // 평상시 걸어다니는 다리 교차 애니메이션 타이머
@@ -33,7 +36,7 @@ const [step, setStep] = useState(0);
 
   const shirtColor = SHIRT_COLORS[docType ?? "general"] ?? SHIRT_COLORS.general;
 
-  const striding = !isHeld && isWalking;
+  const striding = !isHeld && isWalking && !isResting;
   const legLeftAngle = striding
     ? step === 1 ? 16 : step === 3 ? -16 : 0
     : 0;
@@ -43,51 +46,59 @@ const [step, setStep] = useState(0);
 
   return (
     <div className="relative flex flex-col items-center select-none pointer-events-none">
-      {/* 1. 공중에 들렸을 때 나타나는 Wii 핸드 장갑 */}
+      {/* 1. 잡혔을 때 머리 위에 뜨는 말풍선 */}
       {isHeld && (
-        <div className="absolute -top-16 z-30 animate-bounce transition-transform duration-150">
-          <svg width="60" height="70" viewBox="0 0 60 70" fill="none" className="drop-shadow-md">
-            {/* 팔목 */}
-            <path d="M22 0 L38 0 L38 25 L22 25 Z" fill="#f0f0f0" stroke="#222" strokeWidth="2.5" />
-            {/* 장갑 주름/소매단 */}
-            <rect x="18" y="22" width="24" height="7" rx="3.5" fill="#ffffff" stroke="#222" strokeWidth="2.5" />
-            {/* 장갑 손바닥 & 꼬집는 손가락 (Wii Hand) */}
-            <path
-              d="M16 32 C12 36 14 48 20 54 C24 58 36 58 40 54 C46 48 48 36 44 32 C42 28 38 29 36 33 C34 26 26 26 24 33 C22 28 18 29 16 32 Z"
-              fill="#ffffff"
-              stroke="#222"
-              strokeWidth="2.5"
-            />
-            {/* 장갑 등 주름 3줄 디테일 */}
-            <line x1="26" y1="38" x2="26" y2="46" stroke="#555" strokeWidth="2" strokeLinecap="round" />
-            <line x1="30" y1="37" x2="30" y2="47" stroke="#555" strokeWidth="2" strokeLinecap="round" />
-            <line x1="34" y1="38" x2="34" y2="46" stroke="#555" strokeWidth="2" strokeLinecap="round" />
-          </svg>
-        </div>
-      )}
-
-      {/* 2. 잡혔을 때 머리 위에 뜨는 말풍선 */}
-      {isHeld && (
-        <div className="absolute -top-12 -right-14 z-40 bg-white border-2 border-black rounded-2xl px-2.5 py-1 shadow-lg text-[11px] font-black text-red-600 whitespace-nowrap animate-pulse">
+        <div
+          className="absolute -top-10 left-1/2 z-40 bg-white border-2 border-black rounded-2xl px-2.5 py-1 shadow-lg text-[11px] font-black text-red-600 whitespace-nowrap animate-pulse"
+          // 머리 위 정중앙에 고정. 왼쪽을 볼 때 부모가 뒤집으므로 글자만 되돌린다.
+          style={{ transform: flipped ? "translateX(-50%) scaleX(-1)" : "translateX(-50%)" }}
+        >
           LET ME GO! 💦
-          <div className="absolute left-2 -bottom-1.5 w-2 h-2 bg-white border-b-2 border-r-2 border-black rotate-45" />
+          <div className="absolute left-1/2 -bottom-1.5 -ml-1 w-2 h-2 bg-white border-b-2 border-r-2 border-black rotate-45" />
         </div>
       )}
 
-      {/* 3. Mii 캐릭터 본체 */}
-      <div className={`relative transition-all duration-200 ${isHeld ? "-translate-y-6 scale-105" : ""}`}>
+      {/* 2. Mii 캐릭터 본체 */}
+      <div
+        className={`relative transition-all duration-300 ${isHeld ? "-translate-y-6 scale-105" : ""} ${
+          hasWings ? "[animation:miiFly_1.4s_ease-in-out_infinite]" : ""
+        }`}
+      >
         <svg width="76" height="96" viewBox="0 0 76 96" className="overflow-visible">
+          {/* 날개 (사이드바에서 선택됐을 때만) */}
+          {hasWings && (
+            <g>
+              <path
+                d="M28 48 C17 31 4 26 1 35 C-2 43 6 50 13 52 C8 54 9 59 15 59 C11 62 15 66 20 63 C24 61 27 55 28 51 Z"
+                fill="#ffffff"
+                stroke="#3c5a47"
+                strokeWidth="2.2"
+                strokeLinejoin="round"
+                className="origin-[28px_50px] [animation:miiFlap_0.32s_ease-in-out_infinite_alternate]"
+              />
+              <path
+                d="M48 48 C59 31 72 26 75 35 C78 43 70 50 63 52 C68 54 67 59 61 59 C65 62 61 66 56 63 C52 61 49 55 48 51 Z"
+                fill="#ffffff"
+                stroke="#3c5a47"
+                strokeWidth="2.2"
+                strokeLinejoin="round"
+                className="origin-[48px_50px] [animation:miiFlapRight_0.32s_ease-in-out_infinite_alternate]"
+              />
+            </g>
+          )}
           {/* 바닥 그림자 */}
           <ellipse
             cx="38"
             cy="92"
-            rx={isHeld ? 14 : 22}
+            rx={isHeld ? 14 : isResting ? 19 : 22}
             ry={isHeld ? 4 : 6}
             fill="#1e3f24"
             opacity={isHeld ? 0.25 : 0.45}
             className="transition-all duration-200"
           />
 
+          {/* 앉으면 그림자만 남기고 몸 전체가 바닥 쪽으로 내려간다 */}
+          <g transform={isResting ? "translate(0,6)" : undefined}>
           {/* 왼팔 (잡혔을 때 고속 회전 버둥버둥) */}
           <g
             className={isHeld ? "origin-[24px_50px] animate-[miiFlailArm_0.14s_infinite_alternate]" : ""}
@@ -115,8 +126,17 @@ const [step, setStep] = useState(0);
               transition: "transform 0.15s ease",
             }}
           >
-            <path d="M31 68 L27 84" stroke="#443528" strokeWidth="6.5" strokeLinecap="round" />
-            <ellipse cx="25" cy="85" rx="5.5" ry="3.5" fill="#201712" />
+            {isResting ? (
+              <>
+                <path d="M32 70 C22 73 15 80 20 85 C24 89 33 88 40 86" stroke="#443528" strokeWidth="6" strokeLinecap="round" fill="none" />
+                <ellipse cx="41" cy="86" rx="4.4" ry="3" fill="#201712" />
+              </>
+            ) : (
+              <>
+                <path d="M31 68 L27 84" stroke="#443528" strokeWidth="6.5" strokeLinecap="round" />
+                <ellipse cx="25" cy="85" rx="5.5" ry="3.5" fill="#201712" />
+              </>
+            )}
           </g>
 
           {/* 오른다리 */}
@@ -128,8 +148,17 @@ const [step, setStep] = useState(0);
               transition: "transform 0.15s ease",
             }}
           >
-            <path d="M45 68 L49 84" stroke="#443528" strokeWidth="6.5" strokeLinecap="round" />
-            <ellipse cx="51" cy="85" rx="5.5" ry="3.5" fill="#201712" />
+            {isResting ? (
+              <>
+                <path d="M44 70 C54 73 61 80 56 85 C52 89 43 88 36 86" stroke="#443528" strokeWidth="6" strokeLinecap="round" fill="none" />
+                <ellipse cx="35" cy="86" rx="4.4" ry="3" fill="#201712" />
+              </>
+            ) : (
+              <>
+                <path d="M45 68 L49 84" stroke="#443528" strokeWidth="6.5" strokeLinecap="round" />
+                <ellipse cx="51" cy="85" rx="5.5" ry="3.5" fill="#201712" />
+              </>
+            )}
           </g>
 
           {/* 몸통 (셔츠) */}
@@ -206,6 +235,7 @@ const [step, setStep] = useState(0);
                 <path d="M34 36 Q38 40 42 36" stroke="#222" strokeWidth="2" fill="none" strokeLinecap="round" />
               </>
             )}
+          </g>
           </g>
         </svg>
       </div>
