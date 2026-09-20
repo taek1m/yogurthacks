@@ -148,31 +148,42 @@ function makeFinding(
 interface SourceLine {
   page: number;
   text: string;
+  /** The file this line came from, once an agent holds more than one. */
+  source?: string;
 }
 
 export function splitPagesIntoLines(
-  pages: Array<{ page: number; text: string }>,
+  pages: Array<{ page: number; text: string; source?: string }>,
 ): SourceLine[] {
-  return pages.flatMap(({ page, text }) =>
+  return pages.flatMap(({ page, text, source }) =>
     text
       .split(/\n|(?<=[.!?])\s+/)
-      .map((value) => ({ page, text: value.trim() }))
+      .map((value) => ({ page, source, text: value.trim() }))
       .filter((value) => value.text.length > 12),
   );
 }
 
 export function analyzePages(
-  pages: Array<{ page: number; text: string }>,
+  pages: Array<{ page: number; text: string; source?: string }>,
 ): AgentAnalysis {
   const lines = splitPagesIntoLines(pages);
+  const documents = new Set(lines.map((line) => line.source ?? ""));
+  const documentCount = Math.max(1, documents.size);
   // A line is highlighted once, under the most serious category that matches it.
   const claimed = new Set<SourceLine>();
+  /**
+   * Every limit counts per document. A dense first file used to spend the whole
+   * budget, so a second one added later came back with nothing highlighted.
+   */
   const take = (limit: number, match: (line: SourceLine) => boolean) => {
     const picked: SourceLine[] = [];
+    const used = new Map<string, number>();
     for (const line of lines) {
-      if (picked.length >= limit) break;
+      const document = line.source ?? "";
+      if ((used.get(document) ?? 0) >= limit) continue;
       if (claimed.has(line) || !match(line)) continue;
       claimed.add(line);
+      used.set(document, (used.get(document) ?? 0) + 1);
       picked.push(line);
     }
     return picked;
@@ -212,7 +223,11 @@ export function analyzePages(
     ),
   );
 
-  const concerns = [...redFlagFindings, ...concernsFor("important")].slice(0, MAX_PER_SECTION.concerns);
+  // The section cap grows with the shelf: two documents may hold twice as much.
+  const concerns = [...redFlagFindings, ...concernsFor("important")].slice(
+    0,
+    MAX_PER_SECTION.concerns * documentCount,
+  );
 
   const favorableTerms = take(MAX_PER_SECTION.favorable, (line) => FAVORABLE_PATTERN.test(line.text)).map((line) =>
     makeFinding(

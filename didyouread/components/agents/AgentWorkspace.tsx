@@ -2,6 +2,7 @@
 
 import { PanelRightOpen } from "lucide-react";
 import type { ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { DocumentHighlights } from "@/components/agents/DocumentHighlights";
 import type { HighlightedDocument } from "@/lib/document-highlights";
@@ -31,6 +32,7 @@ export function AgentWorkspace({
   hiddenPageAt?: Record<string, string>;
 }) {
   const [open, setOpen] = useState(true);
+  const router = useRouter();
 
   if (!highlighted) {
     return <div className="mx-auto grid w-full max-w-[1500px] flex-1 grid-cols-1">{chat}</div>;
@@ -54,6 +56,7 @@ export function AgentWorkspace({
           overrides={highlightOverrides}
           removedPages={hiddenPages}
           removedPageAt={hiddenPageAt}
+          onReread={() => router.refresh()}
           onHide={() => setOpen(false)}
         />
       ) : (

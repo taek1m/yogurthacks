@@ -14,7 +14,7 @@ vi.mock("@/lib/pdf", async () => {
   return { ...actual, readPdfUpload: (...args: unknown[]) => readPdf(...args) };
 });
 
-const { readDocumentUpload } = await import("@/lib/document-upload");
+const { readDocumentUpload, unusedDocumentName } = await import("@/lib/document-upload");
 const { PdfError } = await import("@/lib/pdf");
 
 function photo(name: string, type = "image/jpeg") {
@@ -93,5 +93,25 @@ describe("reading an uploaded document", () => {
     await expect(readDocumentUpload(form(photo("IMG_01.jpg")))).rejects.toMatchObject({
       status: 503,
     });
+  });
+});
+
+describe("naming a document that arrives twice", () => {
+  it("leaves a name that is free alone", () => {
+    expect(unusedDocumentName("image.jpg", ["lease.pdf"])).toBe("image.jpg");
+  });
+
+  it("numbers repeat camera file names instead of refusing them", () => {
+    const taken = ["image.jpg"];
+    const second = unusedDocumentName("image.jpg", taken);
+    expect(second).toBe("image (2).jpg");
+
+    taken.push(second);
+    expect(unusedDocumentName("image.jpg", taken)).toBe("image (3).jpg");
+  });
+
+  it("keeps the extension where it belongs, and copes without one", () => {
+    expect(unusedDocumentName("scan.page.jpeg", ["scan.page.jpeg"])).toBe("scan.page (2).jpeg");
+    expect(unusedDocumentName("photo", ["photo"])).toBe("photo (2)");
   });
 });

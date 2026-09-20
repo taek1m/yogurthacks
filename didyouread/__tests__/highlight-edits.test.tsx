@@ -71,7 +71,7 @@ describe("editing the highlights", () => {
 
     expect(marked().some((text) => /non-refundable/.test(text))).toBe(true);
     clickDepositMark();
-    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove this highlight" }));
 
     await waitFor(() => expect(marked().some((text) => /non-refundable/.test(text))).toBe(false));
     expect(fetchMock).toHaveBeenCalledWith(
@@ -79,20 +79,6 @@ describe("editing the highlights", () => {
       expect.objectContaining({ method: "PATCH" }),
     );
     expect(screen.getByText(/Removed by you/)).toBeInTheDocument();
-  });
-
-  it("recolours a highlight into the category the reader picks", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
-    vi.stubGlobal("fetch", fetchMock);
-    paint();
-
-    clickDepositMark();
-    fireEvent.click(screen.getByRole("button", { name: "Mark as Money" }));
-
-    await waitFor(() => {
-      const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
-      expect(body).toMatchObject({ key: depositKey, kind: "financial" });
-    });
   });
 
   it("starts from the edits already saved for this agent", () => {
@@ -108,7 +94,7 @@ describe("editing the highlights", () => {
     paint();
 
     clickDepositMark();
-    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove this highlight" }));
 
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("was not saved"));
     expect(marked().some((text) => /non-refundable/.test(text))).toBe(true);
@@ -124,11 +110,11 @@ describe("the change history", () => {
     paint();
 
     clickDepositMark();
-    fireEvent.click(screen.getByRole("button", { name: "Mark as Money" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove this highlight" }));
     fireEvent.click(screen.getByRole("button", { name: /^History/ }));
 
     expect(await screen.findByText(/^1 change\./)).toBeInTheDocument();
-    expect(screen.getByText(/Red flags → Money/)).toBeInTheDocument();
+    expect(screen.getByText(/Removed from Red flags/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /^Undo:/ }));
     await waitFor(() => expect(screen.getByText(/have not changed anything yet/)).toBeInTheDocument());
@@ -174,7 +160,7 @@ describe("deleting a page", () => {
     await waitFor(() => expect(pageText().some((text) => /late fee/.test(text))).toBe(false));
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/agents/agent-1/highlights",
-      expect.objectContaining({ method: "PATCH", body: JSON.stringify({ page: 2, hidden: true }) }),
+      expect.objectContaining({ method: "PATCH", body: JSON.stringify({ pages: [2], hidden: true }) }),
     );
 
     fireEvent.click(screen.getByRole("button", { name: /^History/ }));
@@ -277,13 +263,13 @@ describe("the order of the history", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete page 2" }));
     await waitFor(() => expect(screen.getByRole("button", { name: /^History \(1/ })).toBeInTheDocument());
     clickDepositMark();
-    fireEvent.click(screen.getByRole("button", { name: "Mark as Money" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove this highlight" }));
 
     fireEvent.click(screen.getByRole("button", { name: /^History/ }));
     await waitFor(() => expect(historyLines().length).toBeGreaterThan(1));
 
-    // The recolour came second, so it leads; the page deletion follows.
-    expect(historyLines()[0]).toMatch(/→ Money/);
+    // The removal came second, so it leads; the page deletion follows.
+    expect(historyLines()[0]).toMatch(/^Removed from/);
     expect(historyLines()[1]).toBe("Page 2 deleted");
   });
 
@@ -298,7 +284,7 @@ describe("the order of the history", () => {
           document={document2}
           documentName="lease.pdf"
           // The highlight is on page 1, which stays on screen, so both show.
-          overrides={{ [depositKey]: { kind: "financial", severity: "important", at: overrideAt } }}
+          overrides={{ [depositKey]: { removed: true, at: overrideAt } }}
           removedPages={[2]}
           removedPageAt={{ "2": pageAt }}
         />,
@@ -307,12 +293,109 @@ describe("the order of the history", () => {
 
     const first = paintAt("2026-01-01T00:00:00.000Z", "2026-03-01T00:00:00.000Z");
     fireEvent.click(screen.getByRole("button", { name: /^History/ }));
-    expect(historyLines()).toEqual(["Page 2 deleted", expect.stringMatching(/→ Money/)]);
+    expect(historyLines()).toEqual(["Page 2 deleted", expect.stringMatching(/^Removed from/)]);
     first.unmount();
 
     // Same two changes, made the other way round.
     paintAt("2026-05-01T00:00:00.000Z", "2026-03-01T00:00:00.000Z");
     fireEvent.click(screen.getByRole("button", { name: /^History/ }));
-    expect(historyLines()).toEqual([expect.stringMatching(/→ Money/), "Page 2 deleted"]);
+    expect(historyLines()).toEqual([expect.stringMatching(/^Removed from/), "Page 2 deleted"]);
+  });
+});
+
+describe("documents in the panel", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const twoFiles = [
+    { page: 1, text: pages[0].text, source: "lease.pdf" },
+    { page: 2, text: "A late fee of $95 applies after the fifth day.", source: "car.jpg" },
+  ];
+
+  function paintTwoFiles() {
+    return render(
+      <DocumentHighlights
+        agentId="agent-1"
+        document={buildHighlightedDocument(twoFiles, analyzePages(twoFiles))}
+        documentName="lease.pdf"
+        documentNames={["lease.pdf", "car.jpg"]}
+      />,
+    );
+  }
+
+  function bodyText() {
+    return [...document.querySelectorAll("article")].map((node) => node.textContent ?? "").join(" ");
+  }
+
+  it("gathers each file's pages under its own heading", () => {
+    paintTwoFiles();
+    expect(screen.getByRole("button", { expanded: true, name: /lease\.pdf/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { expanded: true, name: /car\.jpg/ })).toBeInTheDocument();
+    expect(bodyText()).toMatch(/late fee/);
+  });
+
+  it("folds one file away without touching the other", () => {
+    paintTwoFiles();
+
+    fireEvent.click(screen.getByRole("button", { expanded: true, name: /car\.jpg/ }));
+
+    expect(bodyText()).not.toMatch(/late fee/);
+    // The lease is still open, and the folded file can be brought back.
+    expect(bodyText()).toMatch(/non-refundable/);
+    fireEvent.click(screen.getByRole("button", { expanded: false, name: /car\.jpg/ }));
+    expect(bodyText()).toMatch(/late fee/);
+  });
+
+  it("asks the server to read one file again and reports what it found", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ added: 2 }) });
+    vi.stubGlobal("fetch", fetchMock);
+    paintTwoFiles();
+
+    fireEvent.click(screen.getByRole("button", { name: "Read car.jpg again" }));
+
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Added 2 highlights to car.jpg."));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/agents/agent-1/reanalyze",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ source: "car.jpg" }) }),
+    );
+  });
+
+  it("deletes a whole file at once and undoes it in one go", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchMock);
+    paintTwoFiles();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete car.jpg" }));
+
+    await waitFor(() => expect(bodyText()).not.toMatch(/late fee/));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/agents/agent-1/highlights",
+      expect.objectContaining({ method: "PATCH", body: JSON.stringify({ pages: [2], hidden: true }) }),
+    );
+    // The lease is untouched.
+    expect(bodyText()).toMatch(/non-refundable/);
+
+    fireEvent.click(screen.getByRole("button", { name: /^History/ }));
+    expect(screen.getByText("car.jpg deleted")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Undo: car.jpg deleted" }));
+    await waitFor(() => expect(bodyText()).toMatch(/late fee/));
+  });
+
+  it("keeps the file when deleting it fails", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, json: async () => ({}) }));
+    paintTwoFiles();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete car.jpg" }));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("car.jpg was not deleted"));
+    expect(bodyText()).toMatch(/late fee/);
+  });
+
+  it("says so when the re-read could not run", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, json: async () => ({ error: "nope" }) }));
+    paintTwoFiles();
+
+    fireEvent.click(screen.getByRole("button", { name: "Read lease.pdf again" }));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/could not be read again/));
   });
 });

@@ -54,14 +54,24 @@ export async function addCalendarReminder(
   if (!isClerkConfigured) return { ok: false, reason: "no_google" };
 
   let token: string | undefined;
+  let scopes: string[] = [];
   try {
     const client = await clerkClient();
+    // Clerk stopped wanting the "oauth_" prefix; plain "google" is current.
     const tokens = await client.users.getUserOauthAccessToken(userId, "google");
     token = tokens.data[0]?.token;
-  } catch {
+    scopes = tokens.data[0]?.scopes ?? [];
+  } catch (error) {
+    // Worth seeing in the log: a bad key or a disabled connection looks the
+    // same as "never signed in with Google" from the outside.
+    console.error("Clerk could not hand over a Google token", error);
     return { ok: false, reason: "no_google" };
   }
   if (!token) return { ok: false, reason: "no_google" };
+  // Asking Google for something the token was never granted just wastes a call.
+  if (scopes.length > 0 && !scopes.includes(CALENDAR_SCOPE)) {
+    return { ok: false, reason: "no_scope" };
+  }
 
   const response = await fetch(
     "https://www.googleapis.com/calendar/v3/calendars/primary/events",

@@ -1,4 +1,4 @@
-import type { Collection, Filter } from "mongodb";
+import type { Collection, Filter, UpdateFilter } from "mongodb";
 import { getDatabase, isMongoConfigured } from "@/lib/mongodb";
 import type {
   AgentAnalysis,
@@ -334,6 +334,38 @@ export async function setHighlightOverride(
 }
 
 /**
+ * Stores a fresh reading of the document: the rule-based analysis run again over
+ * every page, plus whatever the re-read added on top of it.
+ */
+export async function saveReanalysis(
+  ownerId: string,
+  id: string,
+  update: {
+    analysis: AgentAnalysis;
+    readerHighlights: ReaderHighlight[];
+    deadlineCount: number;
+    attentionCount: number;
+    statusLabel: string;
+  },
+): Promise<DocumentAgent | null> {
+  const updatedAt = new Date().toISOString();
+
+  if (!isMongoConfigured()) {
+    const agent = memory.find((item) => item.ownerId === ownerId && item.id === id);
+    if (!agent) return null;
+    Object.assign(agent, update, { updatedAt });
+    return publicAgent(agent);
+  }
+
+  const result = await (await collection()).findOneAndUpdate(
+    { ownerId, id },
+    { $set: { ...update, updatedAt } },
+    { returnDocument: "after" },
+  );
+  return result ? publicAgent(result) : null;
+}
+
+/**
  * Saves the whole marked-up view at once, after the agent carried out highlight
  * changes the reader asked for in the chat. Both sides are written together so
  * a new highlight and the override that colours it can never land apart.
@@ -367,39 +399,47 @@ export async function saveHighlightEdits(
  * stays in extractedPages, so the agent still answers from it and the change
  * can always be undone from the history.
  */
-export async function setPageHidden(
+export async function setPagesHidden(
   ownerId: string,
   id: string,
-  page: number,
+  pages: number[],
   hidden: boolean,
 ): Promise<DocumentAgent | null> {
+  if (pages.length === 0) return getAgent(ownerId, id);
   const updatedAt = new Date().toISOString();
 
   if (!isMongoConfigured()) {
     const agent = memory.find((item) => item.ownerId === ownerId && item.id === id);
     if (!agent) return null;
-    const pages = new Set(agent.hiddenPages ?? []);
+    const held = new Set(agent.hiddenPages ?? []);
     const at = { ...(agent.hiddenPageAt ?? {}) };
-    if (hidden) {
-      pages.add(page);
-      at[String(page)] = updatedAt;
-    } else {
-      pages.delete(page);
-      delete at[String(page)];
+    for (const page of pages) {
+      if (hidden) {
+        held.add(page);
+        at[String(page)] = updatedAt;
+      } else {
+        held.delete(page);
+        delete at[String(page)];
+      }
     }
-    agent.hiddenPages = [...pages].sort((a, b) => a - b);
+    agent.hiddenPages = [...held].sort((a, b) => a - b);
     agent.hiddenPageAt = at;
     agent.updatedAt = updatedAt;
     return publicAgent(agent);
   }
 
-  const result = await (await collection()).findOneAndUpdate(
-    { ownerId, id },
-    hidden
-      ? { $addToSet: { hiddenPages: page }, $set: { [`hiddenPageAt.${page}`]: updatedAt, updatedAt } }
-      : { $pull: { hiddenPages: page }, $unset: { [`hiddenPageAt.${page}`]: "" }, $set: { updatedAt } },
-    { returnDocument: "after" },
+  // A whole document goes in one write, so half a file can never be left hidden.
+  const times = Object.fromEntries(pages.map((page) => [`hiddenPageAt.${page}`, updatedAt]));
+  // $unset wants "" (or 1/true) as the value, not any old string.
+  const cleared: Record<string, ""> = Object.fromEntries(
+    pages.map((page) => [`hiddenPageAt.${page}`, "" as const]),
   );
+  const update: UpdateFilter<StoredDocumentAgent> = hidden
+    ? { $addToSet: { hiddenPages: { $each: pages } }, $set: { ...times, updatedAt } }
+    : { $pull: { hiddenPages: { $in: pages } }, $unset: cleared, $set: { updatedAt } };
+  const result = await (await collection()).findOneAndUpdate({ ownerId, id }, update, {
+    returnDocument: "after",
+  });
   return result ? publicAgent(result) : null;
 }
 

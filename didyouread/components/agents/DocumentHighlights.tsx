@@ -1,11 +1,12 @@
 "use client";
 
-import { CalendarPlus, CircleAlert, CircleCheck, DollarSign, FileText, Highlighter, History, MessageSquareText, PanelRightClose, RotateCcw, Trash2, TriangleAlert, Undo2, X } from "lucide-react";
+import { CalendarPlus, ChevronDown, ChevronRight, CircleAlert, CircleCheck, DollarSign, FileText, History, MessageSquareText, LoaderCircle, PanelRightClose, RefreshCw, RotateCcw, Trash2, TriangleAlert, Undo2, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import type { HighlightMark, HighlightedDocument } from "@/lib/document-highlights";
-import { PALETTE, PALETTE_COLORS } from "@/lib/highlight-palette";
-import type { FindingSeverity, HighlightColor, HighlightKind, HighlightOverride } from "@/types/agent";
+import { PALETTE } from "@/lib/highlight-palette";
+import type { HighlightOverride } from "@/types/agent";
 
 type Tone = "red_flag" | "concern" | "deadline" | "financial" | "favorable";
 
@@ -48,15 +49,6 @@ const TONES: Record<Tone, { label: string; icon: LucideIcon; mark: string; chip:
 };
 
 const TONE_ORDER: Tone[] = ["red_flag", "concern", "deadline", "financial", "favorable"];
-
-/** Picking a colour is picking a category; these are the two sides of it. */
-const TONE_MEANS: Record<Tone, { kind: HighlightKind; severity: FindingSeverity }> = {
-  red_flag: { kind: "concern", severity: "red_flag" },
-  concern: { kind: "concern", severity: "important" },
-  deadline: { kind: "deadline", severity: "important" },
-  financial: { kind: "financial", severity: "important" },
-  favorable: { kind: "favorable", severity: "info" },
-};
 
 export function toneOf(mark: HighlightMark): Tone {
   if (mark.kind === "concern") return mark.severity === "red_flag" ? "red_flag" : "concern";
@@ -123,6 +115,7 @@ export function DocumentHighlights({
   overrides,
   removedPages,
   removedPageAt,
+  onReread,
   onHide,
 }: {
   agentId: string;
@@ -134,6 +127,8 @@ export function DocumentHighlights({
   removedPages?: number[];
   /** When each of those pages went, so the history can lead with the newest. */
   removedPageAt?: Record<string, string>;
+  /** Asks the page to repaint once a document has been read again. */
+  onReread?: () => void;
   onHide?: () => void;
 }) {
   // Filter chips, held by paint id so a colour of the reader's own filters too.
@@ -155,7 +150,10 @@ export function DocumentHighlights({
   }
   const [saveError, setSaveError] = useState("");
   const [showHistory, setShowHistory] = useState(false);
-  const [reminder, setReminder] = useState<{ text: string; link?: string } | null>(null);
+  const [folded, setFolded] = useState<string[]>([]);
+  const [rereading, setRereading] = useState<string | null>(null);
+  const [rereadNote, setRereadNote] = useState("");
+  const [reminder, setReminder] = useState<{ text: string; link?: string; settings?: boolean } | null>(null);
   const [addingReminder, setAddingReminder] = useState(false);
 
   /**
@@ -182,44 +180,39 @@ export function DocumentHighlights({
     }
   }
 
-  /**
-   * Names a colour of the reader's own. The name is what the filter chip says,
-   * so an unnamed colour would only ever read "Grey".
-   */
-  function nameFor(color: HighlightColor): string | undefined {
-    const given = window.prompt(
-      `What does ${PALETTE[color].label.toLowerCase()} mean in this document? For example "Chapter titles".`,
-      "",
-    );
-    return given?.trim().slice(0, 40) || undefined;
-  }
-
   /** Deletes a whole page from the marked-up view, or puts one back. */
-  async function setPageRemoved(page: number, removed: boolean) {
+  async function setPagesRemoved(pages: number[], removed: boolean, what = "That page") {
+    if (pages.length === 0) return;
     const previous = hidden;
     const previousAt = hiddenAt;
+    const now = new Date().toISOString();
     setHidden((current) =>
-      removed ? [...current, page].sort((a, b) => a - b) : current.filter((value) => value !== page),
+      removed
+        ? [...new Set([...current, ...pages])].sort((a, b) => a - b)
+        : current.filter((value) => !pages.includes(value)),
     );
     setHiddenAt((current) => {
       const next = { ...current };
-      if (removed) next[String(page)] = new Date().toISOString();
-      else delete next[String(page)];
+      for (const page of pages) {
+        if (removed) next[String(page)] = now;
+        else delete next[String(page)];
+      }
       return next;
     });
     setSaveError("");
+    setRereadNote("");
     setSelected(null);
     try {
       const response = await fetch(`/api/agents/${agentId}/highlights`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ page, hidden: removed }),
+        body: JSON.stringify({ pages, hidden: removed }),
       });
       if (!response.ok) throw new Error("save failed");
     } catch {
       setHidden(previous);
       setHiddenAt(previousAt);
-      setSaveError(removed ? "That page was not deleted. Try again." : "That page was not put back. Try again.");
+      setSaveError(`${what} was not ${removed ? "deleted" : "put back"}. Try again.`);
     }
   }
 
@@ -237,12 +230,14 @@ export function DocumentHighlights({
         setReminder({ text: `Added to your Google Calendar on ${result.date}.`, link: result.link });
         return;
       }
+      // A calendar file always works, so the reminder is never simply lost.
       downloadReminder(mark);
       setReminder({
         text:
           result.reason === "no_scope"
-            ? "Calendar access was not granted, so a calendar file was downloaded instead."
-            : "No Google account is connected, so a calendar file was downloaded instead.",
+            ? "Google has not granted calendar access, so a calendar file was downloaded instead. Reconnect Google to allow it."
+            : "No Google account is connected, so a calendar file was downloaded instead. Connect one to write reminders straight to your calendar.",
+        settings: result.reason !== "failed",
       });
     } catch {
       downloadReminder(mark);
@@ -332,18 +327,51 @@ export function DocumentHighlights({
   const removedMarks = highlighted.marks.filter(
     (mark) => edits[mark.key]?.removed && liveKeys.has(mark.key),
   );
+  /**
+   * Deleted pages, but a file whose every page went is one line, not several:
+   * that is what the reader did, and one Undo should bring the whole file back.
+   */
+  const deletedPages = () => {
+    const byFile = new Map<string, { all: number[]; gone: number[] }>();
+    for (const page of highlighted.pages) {
+      const name = page.source ?? documentName;
+      const entry = byFile.get(name) ?? { all: [], gone: [] };
+      entry.all.push(page.page);
+      if (hidden.includes(page.page)) entry.gone.push(page.page);
+      byFile.set(name, entry);
+    }
+    const newest = (pages: number[]) =>
+      pages.map((page) => hiddenAt[String(page)]).filter(Boolean).sort().at(-1);
+
+    return [...byFile.entries()].flatMap(([name, { all, gone }]) => {
+      if (gone.length === 0) return [];
+      if (gone.length === all.length) {
+        return [{
+          id: `file-${name}`,
+          at: newest(gone),
+          label: `${name} deleted`,
+          detail:
+            all.length === 1
+              ? "Its page was taken out of the marked-up view."
+              : `All ${all.length} pages were taken out of the marked-up view.`,
+          undoLabel: `Undo: ${name} deleted`,
+          undo: () => void setPagesRemoved(gone, false, name),
+        }];
+      }
+      return gone.map((page) => ({
+        id: `page-${page}`,
+        at: hiddenAt[String(page)],
+        label: `Page ${page} deleted`,
+        detail: "The whole page was taken out of the marked-up view.",
+        undoLabel: `Undo: page ${page} deleted`,
+        undo: () => void setPagesRemoved([page], false),
+      }));
+    });
+  };
+
   /** One line per change, newest first, whether it was a page or a highlight. */
   const historyEntries = [
-    ...highlighted.pages
-      .filter((page) => hidden.includes(page.page))
-      .map((page) => ({
-        id: `page-${page.page}`,
-        at: hiddenAt[String(page.page)],
-        label: `Page ${page.page} deleted`,
-        detail: "The whole page was taken out of the marked-up view.",
-        undoLabel: `Undo: page ${page.page} deleted`,
-        undo: () => void setPageRemoved(page.page, false),
-      })),
+    ...deletedPages(),
     ...highlighted.marks
       // A highlight on a deleted page is already gone; listing it twice confuses.
       .filter((mark) => liveKeys.has(mark.key))
@@ -383,6 +411,53 @@ export function DocumentHighlights({
     return 0;
   });
   const changeCount = historyEntries.length;
+  /** The pages still on show, gathered under the file each one came from. */
+  const documents = useMemo(() => {
+    const groups = new Map<string, typeof shownPages>();
+    for (const page of shownPages) {
+      const name = page.source ?? documentName;
+      groups.set(name, [...(groups.get(name) ?? []), page]);
+    }
+    return [...groups.entries()].map(([name, group]) => ({
+      name,
+      pages: group,
+      marks: group.reduce(
+        (sum, page) => sum + page.segments.filter((segment) => segment.mark && shownMark(segment.mark)).length,
+        0,
+      ),
+    }));
+    // shownMark reads the same edits this already depends on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shownPages, documentName, edits]);
+
+  /** Reads one document again, in case its highlights came out thin. */
+  async function reread(source: string) {
+    setRereading(source);
+    setRereadNote("");
+    setSaveError("");
+    try {
+      const response = await fetch(`/api/agents/${agentId}/reanalyze`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source }),
+      });
+      const result = (await response.json()) as { added?: number; aiError?: string; error?: string };
+      if (!response.ok) throw new Error(result.error || "re-read failed");
+      setRereadNote(
+        result.aiError
+          ? "The highlights were refreshed, but the deeper re-read is unavailable right now."
+          : result.added
+            ? `Added ${result.added} highlight${result.added === 1 ? "" : "s"} to ${source}.`
+            : `Read ${source} again. Nothing else stood out.`,
+      );
+      onReread?.();
+    } catch {
+      setSaveError(`${source} could not be read again. Try again.`);
+    } finally {
+      setRereading(null);
+    }
+  }
+
   const total = paints.reduce((sum, paint) => sum + paint.count, 0);
   const files = documentNames?.length ? documentNames : [documentName];
   // Page numbers run on across documents, so each card says which file it is from.
@@ -477,6 +552,12 @@ export function DocumentHighlights({
           )}
         </div>
       </div>
+
+      {rereadNote && (
+        <p role="status" className="border-b border-[#cfe0d2] bg-[#eef6ec] px-5 py-2 text-xs font-semibold text-[#2d6841] sm:px-7">
+          {rereadNote}
+        </p>
+      )}
 
       {saveError && (
         <p role="alert" className="border-b border-[#f0d5cf] bg-[#fff0ed] px-5 py-2 text-xs font-semibold text-[#a43b32] sm:px-7">
@@ -581,74 +662,39 @@ export function DocumentHighlights({
                           </a>
                         </>
                       )}
+                      {reminder.settings && (
+                        <>
+                          {" "}
+                          <Link href="/settings" className="font-bold underline">
+                            Connect Google
+                          </Link>
+                        </>
+                      )}
                     </p>
                   )}
                 </div>
               )}
 
-              {/* 기계가 고른 분류를 읽는 사람이 바로잡는 자리 */}
-              <div className="mt-3 border-t border-[#e2e9de] pt-2.5">
-                <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase text-[#708477]">
-                  <Highlighter size={12} />
-                  Change the colour
-                </p>
-                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                  {TONE_ORDER.map((tone) => {
-                    const current = !selectedMark.color && toneOf(selectedMark) === tone;
-                    return (
-                      <button
-                        key={tone}
-                        type="button"
-                        title={TONES[tone].label}
-                        aria-label={`Mark as ${TONES[tone].label}`}
-                        aria-pressed={current}
-                        onClick={() => void save(rawSelected!.key, TONE_MEANS[tone])}
-                        className={`size-6 rounded-full border transition ${TONES[tone].dot} ${
-                          current ? "scale-110 border-[#1e432d] ring-2 ring-[#c4dfc9]" : "border-black/20 hover:scale-105"
-                        }`}
-                      />
-                    );
-                  })}
-                </div>
-                <p className="mt-2 text-[11px] font-bold uppercase text-[#708477]">Or a colour of your own</p>
-                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                  {PALETTE_COLORS.map((color) => {
-                    const current = selectedMark.color === color;
-                    return (
-                      <button
-                        key={color}
-                        type="button"
-                        title={PALETTE[color].label}
-                        aria-label={`Mark in ${PALETTE[color].label}`}
-                        aria-pressed={current}
-                        onClick={() => void save(rawSelected!.key, { color, label: nameFor(color) })}
-                        className={`size-6 rounded-full border transition ${PALETTE[color].dot} ${
-                          current ? "scale-110 border-[#1e432d] ring-2 ring-[#c4dfc9]" : "border-black/20 hover:scale-105"
-                        }`}
-                      />
-                    );
-                  })}
-                </div>
-                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              {/* 읽는 사람은 색을 고르지 않는다. 남길지 지울지만 정한다. */}
+              <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-[#e2e9de] pt-2.5">
+                <button
+                  type="button"
+                  onClick={() => void save(rawSelected!.key, { removed: true })}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-[#e0a79d] bg-white px-2.5 py-1.5 text-xs font-bold text-[#8f2f23] hover:bg-[#fff0ed]"
+                >
+                  <Trash2 size={13} />
+                  Remove this highlight
+                </button>
+                {edits[rawSelected!.key] && (
                   <button
                     type="button"
-                    onClick={() => void save(rawSelected!.key, { removed: true })}
-                    className="ml-1 inline-flex items-center gap-1.5 rounded-md border border-[#e0a79d] bg-white px-2.5 py-1.5 text-xs font-bold text-[#8f2f23] hover:bg-[#fff0ed]"
+                    onClick={() => void save(rawSelected!.key, null)}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-[#c6d4c3] bg-white px-2.5 py-1.5 text-xs font-bold text-[#3c5a47] hover:bg-[#eef6ec]"
                   >
-                    <Trash2 size={13} />
-                    Remove
+                    <RotateCcw size={13} />
+                    Reset
                   </button>
-                  {edits[rawSelected!.key] && (
-                    <button
-                      type="button"
-                      onClick={() => void save(rawSelected!.key, null)}
-                      className="inline-flex items-center gap-1.5 rounded-md border border-[#c6d4c3] bg-white px-2.5 py-1.5 text-xs font-bold text-[#3c5a47] hover:bg-[#eef6ec]"
-                    >
-                      <RotateCcw size={13} />
-                      Reset
-                    </button>
-                  )}
-                </div>
+                )}
               </div>
             </div>
             <button
@@ -664,56 +710,113 @@ export function DocumentHighlights({
       )}
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5 sm:px-7">
-        {shownPages.map((page) => (
-          <article key={page.page} className="rounded-lg border border-[#dce5d9] bg-[#fffef9] p-4 shadow-sm">
-            <div className="mb-2 flex items-start justify-between gap-2">
-              <p className="flex min-w-0 items-baseline gap-1.5 text-[11px] font-bold uppercase tracking-wide text-[#7b897f]">
-                <span>Page {page.page}</span>
-                {showSources && page.source && <span className="truncate normal-case text-[#9aa79e]">· {page.source}</span>}
-              </p>
-              <button
-                type="button"
-                onClick={() => void setPageRemoved(page.page, true)}
-                title={`Delete page ${page.page}`}
-                aria-label={`Delete page ${page.page}`}
-                className="-mr-1 -mt-1 grid size-7 shrink-0 place-items-center rounded text-[#9aa79e] transition hover:bg-[#fbe6e2] hover:text-[#8f2f23]"
-              >
-                <Trash2 size={14} />
-              </button>
-            </div>
-            <p className="whitespace-pre-wrap text-[13px] leading-6 text-[#31473a]">
-              {page.segments.map((segment, index) => {
-                const mark = segment.mark ? shownMark(segment.mark) : null;
-                if (!mark) return <span key={index}>{segment.text}</span>;
-                const paint = paintOf(mark);
-                const dimmed = !shown(paint);
-                const isSelected = mark.findingId === selected;
-                const select = () => {
-                  setReminder(null);
-                  setSelected(isSelected ? null : mark.findingId);
-                };
-                return (
-                  <mark
-                    key={index}
-                    role="button"
-                    tabIndex={0}
-                    title={mark.title}
-                    aria-label={`${paint.label}: ${mark.title}`}
-                    onClick={select}
-                    onKeyDown={(event) => {
-                      if (event.key !== "Enter" && event.key !== " ") return;
-                      event.preventDefault();
-                      select();
-                    }}
-                    className={`cursor-pointer rounded-sm px-0.5 underline decoration-2 underline-offset-2 transition ${paint.mark} ${dimmed ? "bg-transparent text-[#8c9a90] decoration-transparent" : ""} ${isSelected ? "ring-2 ring-[#2c6440]" : ""}`}
+        {documents.map((document) => {
+          const open = !folded.includes(document.name);
+          return (
+            <section key={document.name} className="rounded-lg border border-[#dce5d9] bg-[#f8fbf6]">
+              <div className="flex items-center gap-2 px-3 py-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setFolded((current) =>
+                      current.includes(document.name)
+                        ? current.filter((name) => name !== document.name)
+                        : [...current, document.name],
+                    )
+                  }
+                  aria-expanded={open}
+                  className="flex min-w-0 flex-1 items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-[#eef4ea]"
+                >
+                  {open ? <ChevronDown size={16} className="shrink-0 text-[#4c765a]" /> : <ChevronRight size={16} className="shrink-0 text-[#4c765a]" />}
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-bold text-[#203b2b]">{document.name}</span>
+                    <span className="block text-[11px] text-[#708477]">
+                      {document.pages.length} page{document.pages.length === 1 ? "" : "s"} · {document.marks} highlight
+                      {document.marks === 1 ? "" : "s"}
+                    </span>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  disabled={rereading !== null}
+                  onClick={() => void reread(document.name)}
+                  title={`Read ${document.name} again`}
+                  aria-label={`Read ${document.name} again`}
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-[#c6d4c3] bg-white px-2 py-1 text-[11px] font-bold text-[#2d5640] hover:bg-[#eef6ec] disabled:opacity-50"
+                >
+                  {rereading === document.name ? (
+                    <LoaderCircle size={12} className="animate-spin" />
+                  ) : (
+                    <RefreshCw size={12} />
+                  )}
+                  {rereading === document.name ? "Reading..." : "Re-read"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void setPagesRemoved(document.pages.map((page) => page.page), true, document.name)}
+                  title={`Delete ${document.name}`}
+                  aria-label={`Delete ${document.name}`}
+                  className="grid size-7 shrink-0 place-items-center rounded text-[#9aa79e] transition hover:bg-[#fbe6e2] hover:text-[#8f2f23]"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+              {open && (
+                <div className="space-y-3 px-3 pb-3">
+                  {document.pages.map((page) => (
+              <article key={page.page} className="rounded-lg border border-[#dce5d9] bg-[#fffef9] p-4 shadow-sm">
+                <div className="mb-2 flex items-start justify-between gap-2">
+                  <p className="flex min-w-0 items-baseline gap-1.5 text-[11px] font-bold uppercase tracking-wide text-[#7b897f]">
+                    <span>Page {page.page}</span>
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void setPagesRemoved([page.page], true)}
+                    title={`Delete page ${page.page}`}
+                    aria-label={`Delete page ${page.page}`}
+                    className="-mr-1 -mt-1 grid size-7 shrink-0 place-items-center rounded text-[#9aa79e] transition hover:bg-[#fbe6e2] hover:text-[#8f2f23]"
                   >
-                    {segment.text}
-                  </mark>
-                );
-              })}
-            </p>
-          </article>
-        ))}
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+                <p className="whitespace-pre-wrap text-[13px] leading-6 text-[#31473a]">
+                  {page.segments.map((segment, index) => {
+                    const mark = segment.mark ? shownMark(segment.mark) : null;
+                    if (!mark) return <span key={index}>{segment.text}</span>;
+                    const paint = paintOf(mark);
+                    const dimmed = !shown(paint);
+                    const isSelected = mark.findingId === selected;
+                    const select = () => {
+                      setReminder(null);
+                      setSelected(isSelected ? null : mark.findingId);
+                    };
+                    return (
+                      <mark
+                        key={index}
+                        role="button"
+                        tabIndex={0}
+                        title={mark.title}
+                        aria-label={`${paint.label}: ${mark.title}`}
+                        onClick={select}
+                        onKeyDown={(event) => {
+                          if (event.key !== "Enter" && event.key !== " ") return;
+                          event.preventDefault();
+                          select();
+                        }}
+                        className={`cursor-pointer rounded-sm px-0.5 underline decoration-2 underline-offset-2 transition ${paint.mark} ${dimmed ? "bg-transparent text-[#8c9a90] decoration-transparent" : ""} ${isSelected ? "ring-2 ring-[#2c6440]" : ""}`}
+                      >
+                        {segment.text}
+                      </mark>
+                    );
+                  })}
+                </p>
+              </article>
+                  ))}
+                </div>
+              )}
+            </section>
+          );
+        })}
         {shownPages.length === 0 && (
           <p className="rounded-lg border border-dashed border-[#cfd9cb] bg-[#fbfcf9] p-4 text-center text-xs leading-6 text-[#687a6e]">
             Every page has been deleted from this view. Open History to put one back.

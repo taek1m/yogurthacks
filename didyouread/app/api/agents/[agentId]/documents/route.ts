@@ -2,7 +2,7 @@ import { analyzePages } from "@/lib/agent-utils";
 import { addAgentDocument, getStoredAgent } from "@/lib/agent-repository";
 import { authErrorResponse, requireUserId } from "@/lib/auth";
 import { geminiErrorResponse } from "@/lib/gemini";
-import { readDocumentUpload } from "@/lib/document-upload";
+import { readDocumentUpload, unusedDocumentName } from "@/lib/document-upload";
 import { pdfErrorResponse } from "@/lib/pdf";
 import type { AgentMessage, DocumentPage } from "@/types/agent";
 
@@ -16,14 +16,17 @@ export async function POST(request: Request, { params }: { params: Promise<{ age
     const agent = await getStoredAgent(ownerId, agentId);
     if (!agent) return Response.json({ error: "Agent not found" }, { status: 404 });
 
-    const { pages, documentName } = await readDocumentUpload(await request.formData());
+    const { pages, documentName: uploadedName, kind } = await readDocumentUpload(await request.formData());
     // A topic agent holds no real document, only a placeholder page. Its first
     // PDF turns it into a document agent so the marked-up view can appear.
     const wasTopic = agent.sourceKind === "topic";
     const existingNames = wasTopic ? [] : (agent.documentNames ?? [agent.documentName]);
-    if (existingNames.includes(documentName)) {
-      return Response.json({ error: `${documentName} is already attached to this agent` }, { status: 409 });
+    // The same PDF twice is a mistake worth reporting. The same photo name is
+    // not: every shot off a phone camera arrives called the same thing.
+    if (kind === "pdf" && existingNames.includes(uploadedName)) {
+      return Response.json({ error: `${uploadedName} is already attached to this agent` }, { status: 409 });
     }
+    const documentName = unusedDocumentName(uploadedName, existingNames);
 
     // Older agents stored pages without a source; label them before merging so
     // every page in the marked-up view says which file it came from.

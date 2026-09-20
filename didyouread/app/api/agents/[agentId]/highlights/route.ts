@@ -1,4 +1,4 @@
-import { clearHighlightOverrides, setHighlightOverride, setPageHidden } from "@/lib/agent-repository";
+import { clearHighlightOverrides, setHighlightOverride, setPagesHidden } from "@/lib/agent-repository";
 import { authErrorResponse, requireUserId } from "@/lib/auth";
 import type { FindingSeverity, HighlightKind, HighlightOverride } from "@/types/agent";
 
@@ -17,16 +17,23 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ ag
       removed?: unknown;
       reset?: unknown;
       page?: unknown;
+      pages?: unknown;
       hidden?: unknown;
     };
 
-    // A page is deleted from the marked-up view by its number, not by a key.
-    if (payload.page !== undefined) {
-      const page = payload.page;
-      if (typeof page !== "number" || !Number.isInteger(page) || page < 1) {
+    // Pages are deleted from the marked-up view by number: one, or a whole
+    // document's worth in a single call.
+    if (payload.page !== undefined || payload.pages !== undefined) {
+      const asked = payload.pages !== undefined ? payload.pages : [payload.page];
+      const pages = Array.isArray(asked) ? asked : [];
+      if (
+        pages.length === 0 ||
+        pages.length > 500 ||
+        !pages.every((page) => typeof page === "number" && Number.isInteger(page) && page >= 1)
+      ) {
         return Response.json({ error: "A page number is required" }, { status: 400 });
       }
-      const updated = await setPageHidden(ownerId, agentId, page, payload.hidden !== false);
+      const updated = await setPagesHidden(ownerId, agentId, pages as number[], payload.hidden !== false);
       if (!updated) return Response.json({ error: "Agent not found" }, { status: 404 });
       return Response.json({ hiddenPages: updated.hiddenPages ?? [] });
     }
