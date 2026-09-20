@@ -93,3 +93,48 @@ describe("editing the highlights", () => {
     expect(marked().some((text) => /non-refundable/.test(text))).toBe(true);
   });
 });
+
+describe("the change history", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("lists each change and undoes just the one picked", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchMock);
+    paint();
+
+    clickDepositMark();
+    fireEvent.click(screen.getByRole("button", { name: "Mark as Money" }));
+    fireEvent.click(screen.getByRole("button", { name: /^History/ }));
+
+    expect(await screen.findByText(/1 highlight changed/)).toBeInTheDocument();
+    expect(screen.getByText(/Red flags → Money/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Undo:/ }));
+    await waitFor(() => expect(screen.getByText(/have not changed any highlights/)).toBeInTheDocument());
+  });
+
+  it("restores everything in one go", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchMock);
+    paint({ [depositKey]: { removed: true } });
+
+    fireEvent.click(screen.getByRole("button", { name: /^History/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Restore the original highlights/ }));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith("/api/agents/agent-1/highlights", expect.objectContaining({ method: "DELETE" })),
+    );
+    expect(marked().some((text) => /non-refundable if/.test(text))).toBe(true);
+  });
+
+  it("puts the edits back when restoring fails", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, json: async () => ({}) }));
+    paint({ [depositKey]: { removed: true } });
+
+    fireEvent.click(screen.getByRole("button", { name: /^History/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Restore the original highlights/ }));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("were not restored"));
+    expect(marked().some((text) => /non-refundable if/.test(text))).toBe(false);
+  });
+});

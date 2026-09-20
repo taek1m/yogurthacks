@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { analyzePages } from "@/lib/agent-utils";
-import { buildHighlightedDocument } from "@/lib/document-highlights";
+import { buildHighlightedDocument, highlightKey } from "@/lib/document-highlights";
 import type { AgentAnalysis } from "@/types/agent";
 
 const pages = [
@@ -101,5 +101,26 @@ describe("analysis coverage", () => {
     const marked = highlighted.pages[0].segments.filter((segment) => segment.mark);
     expect(marked.filter((segment) => /fee of \$/.test(segment.text)).length).toBeGreaterThan(1);
     expect(marked.filter((segment) => /waives/.test(segment.text)).length).toBeGreaterThan(1);
+  });
+});
+
+describe("highlightKey", () => {
+  it("is safe to use as a MongoDB field name", () => {
+    // These become update paths like `highlightOverrides.<key>`, where a full
+    // stop would be read as nesting and a trailing one as an empty field.
+    const quotes = [
+      "Electronic signatures shown above are fictional and included only for software testing.",
+      "Rent is $1,450 per month. Late fees apply.",
+      "$dollar and dotted.name and null\u0000byte",
+    ];
+    for (const quote of quotes) {
+      expect(highlightKey(quote)).toMatch(/^h[0-9a-f]{16}$/);
+    }
+  });
+
+  it("is stable for the same sentence and distinct between sentences", () => {
+    const quote = "The security deposit of $1,450 is non-refundable.";
+    expect(highlightKey(quote)).toBe(highlightKey(`  ${quote.toUpperCase()}  `));
+    expect(highlightKey(quote)).not.toBe(highlightKey("A late fee of $75 applies."));
   });
 });

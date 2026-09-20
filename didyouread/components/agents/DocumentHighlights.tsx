@@ -1,6 +1,6 @@
 "use client";
 
-import { CalendarPlus, CircleAlert, CircleCheck, DollarSign, FileText, Highlighter, PanelRightClose, RotateCcw, Trash2, TriangleAlert, X } from "lucide-react";
+import { CalendarPlus, CircleAlert, CircleCheck, DollarSign, FileText, Highlighter, History, PanelRightClose, RotateCcw, Trash2, TriangleAlert, Undo2, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { HighlightMark, HighlightedDocument } from "@/lib/document-highlights";
@@ -105,6 +105,7 @@ export function DocumentHighlights({
   // here first and are saved in the background.
   const [edits, setEdits] = useState<Record<string, HighlightOverride>>(() => overrides ?? {});
   const [saveError, setSaveError] = useState("");
+  const [showHistory, setShowHistory] = useState(false);
   const [reminder, setReminder] = useState<{ text: string; link?: string } | null>(null);
   const [addingReminder, setAddingReminder] = useState(false);
 
@@ -112,6 +113,20 @@ export function DocumentHighlights({
    * Tries the reader's own Google Calendar first, since that is where they will
    * actually see it, and downloads a calendar file when that is not available.
    */
+  /** Throws away every edit and puts the machine's own highlights back. */
+  async function restoreAll() {
+    const previous = edits;
+    setEdits({});
+    setSaveError("");
+    try {
+      const response = await fetch(`/api/agents/${agentId}/highlights`, { method: "DELETE" });
+      if (!response.ok) throw new Error("restore failed");
+    } catch {
+      setEdits(previous);
+      setSaveError("The highlights were not restored. Try again.");
+    }
+  }
+
   async function addReminder(mark: HighlightMark) {
     setAddingReminder(true);
     setReminder(null);
@@ -190,6 +205,10 @@ export function DocumentHighlights({
   const selectedMark = rawSelected ? shownMark(rawSelected) : null;
   const shown = (tone: Tone) => active.length === 0 || active.includes(tone);
   const removedMarks = highlighted.marks.filter((mark) => edits[mark.key]?.removed);
+  /** Every edit, in the order the sentences appear in the document. */
+  const historyEntries = highlighted.marks
+    .map((mark) => ({ mark, edit: edits[mark.key] }))
+    .filter((entry): entry is { mark: HighlightMark; edit: HighlightOverride } => Boolean(entry.edit));
   const total = TONE_ORDER.reduce((sum, tone) => sum + toneCounts[tone], 0);
   const files = documentNames?.length ? documentNames : [documentName];
   // Page numbers run on across documents, so each card says which file it is from.
@@ -206,17 +225,37 @@ export function DocumentHighlights({
       <div className="border-b border-[#d4dfd1] px-5 py-5 sm:px-7">
         <div className="flex items-start justify-between gap-3">
           <p className="text-xs font-bold uppercase text-[#4c765a]">Marked-up document</p>
-          {onHide && (
+          <div className="-mt-1 flex shrink-0 flex-col items-end gap-1.5">
+            {onHide && (
+              <button
+                type="button"
+                onClick={onHide}
+                aria-expanded
+                className="inline-flex items-center gap-1.5 rounded-md border border-[#c6d4c3] bg-white px-2.5 py-1.5 text-xs font-bold text-[#2d5640] hover:bg-[#eef6ec]"
+              >
+                <PanelRightClose size={14} />
+                Hide
+              </button>
+            )}
             <button
               type="button"
-              onClick={onHide}
-              aria-expanded
-              className="-mt-1 inline-flex shrink-0 items-center gap-1.5 rounded-md border border-[#c6d4c3] bg-white px-2.5 py-1.5 text-xs font-bold text-[#2d5640] hover:bg-[#eef6ec]"
+              onClick={() => { setShowHistory((value) => !value); setSelected(null); }}
+              aria-expanded={showHistory}
+              aria-label={
+                historyEntries.length > 0
+                  ? `History (${historyEntries.length} ${historyEntries.length === 1 ? "change" : "changes"})`
+                  : "History"
+              }
+              title="History"
+              className={`inline-flex items-center justify-center p-1 transition ${
+                showHistory || historyEntries.length > 0
+                  ? "text-[#245c39]"
+                  : "text-[#7d9a86] hover:text-[#2d5640]"
+              }`}
             >
-              <PanelRightClose size={14} />
-              Hide
+              <History size={18} />
             </button>
-          )}
+          </div>
         </div>
         <h2 className="mt-0.5 flex items-center gap-2 font-display text-2xl font-semibold text-[#173c28]">
           <FileText size={20} className="shrink-0" />
@@ -265,6 +304,70 @@ export function DocumentHighlights({
           )}
         </div>
       </div>
+
+      {showHistory && (
+        <div className="border-b border-[#d4dfd1] bg-[#fffef9] px-5 py-3 sm:px-7">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-bold uppercase text-[#4c765a]">Your changes</p>
+              <p className="mt-0.5 text-xs leading-5 text-[#687a6e]">
+                {historyEntries.length === 0
+                  ? "You have not changed any highlights yet."
+                  : `${historyEntries.length} highlight${historyEntries.length === 1 ? "" : "s"} changed. Undo them one at a time, or put everything back.`}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowHistory(false)}
+              aria-label="Close the change history"
+              className="grid size-8 shrink-0 place-items-center rounded hover:bg-[#edf3ea]"
+            >
+              <X size={16} />
+            </button>
+          </div>
+
+          {historyEntries.length > 0 && (
+            <>
+              <ul className="mt-2.5 max-h-56 space-y-1.5 overflow-y-auto pr-1">
+                {historyEntries.map(({ mark, edit }) => {
+                  const was = TONES[toneOf(mark)].label;
+                  const now = edit.removed
+                    ? null
+                    : TONES[toneOf({ ...mark, kind: edit.kind ?? mark.kind, severity: edit.severity ?? mark.severity })].label;
+                  return (
+                    <li key={mark.key} className="flex items-start gap-2 rounded-md border border-[#e2e9de] bg-white px-2.5 py-2">
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-xs font-bold text-[#203b2b]">
+                          {edit.removed ? `Removed from ${was}` : `${was} → ${now}`}
+                        </span>
+                        <span className="mt-0.5 block truncate text-xs text-[#687a6e]">“{mark.quote}”</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => void save(mark.key, null)}
+                        aria-label={`Undo: ${mark.title}`}
+                        className="inline-flex shrink-0 items-center gap-1 rounded-md border border-[#c6d4c3] bg-white px-2 py-1 text-xs font-bold text-[#2d5640] hover:bg-[#eef6ec]"
+                      >
+                        <Undo2 size={12} />
+                        Undo
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+              <button
+                type="button"
+                onClick={() => void restoreAll()}
+                className="mt-2.5 inline-flex items-center gap-1.5 rounded-md border border-[#b9cdb8] bg-white px-2.5 py-1.5 text-xs font-bold text-[#2d6841] hover:bg-[#eef6ec]"
+              >
+                <RotateCcw size={13} />
+                Restore the original highlights
+              </button>
+            </>
+          )}
+          {saveError && <p role="alert" className="mt-2 text-xs text-[#a43b32]">{saveError}</p>}
+        </div>
+      )}
 
       {selectedMark && (
         <div className="sticky top-0 z-10 border-b border-[#d4dfd1] bg-[#fffef9] px-5 py-3 shadow-sm sm:px-7">

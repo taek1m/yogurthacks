@@ -292,6 +292,29 @@ export async function setHighlightOverride(
   return result ? publicAgent(result) : null;
 }
 
+/** Drops every reader edit, putting the machine's own highlights back. */
+export async function clearHighlightOverrides(
+  ownerId: string,
+  id: string,
+): Promise<DocumentAgent | null> {
+  const updatedAt = new Date().toISOString();
+
+  if (!isMongoConfigured()) {
+    const agent = memory.find((item) => item.ownerId === ownerId && item.id === id);
+    if (!agent) return null;
+    agent.highlightOverrides = {};
+    agent.updatedAt = updatedAt;
+    return publicAgent(agent);
+  }
+
+  const result = await (await collection()).findOneAndUpdate(
+    { ownerId, id },
+    { $set: { highlightOverrides: {}, updatedAt } },
+    { returnDocument: "after" },
+  );
+  return result ? publicAgent(result) : null;
+}
+
 export async function deleteAgent(ownerId: string, id: string): Promise<boolean> {
   if (!isMongoConfigured()) {
     const index = memory.findIndex((item) => item.ownerId === ownerId && item.id === id);

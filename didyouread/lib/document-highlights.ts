@@ -14,6 +14,8 @@ export interface HighlightMark {
   severity: FindingSeverity;
   title: string;
   detail: string;
+  /** The sentence itself, so an edit can be named in the history list. */
+  quote: string;
   date?: string;
 }
 
@@ -85,9 +87,21 @@ function normalizeQuote(quote: string): string {
 /**
  * Identifies a highlight by what it quotes rather than by a generated id, so a
  * reader's edit still applies after the document is analysed again.
+ *
+ * Hashed rather than stored verbatim: these become MongoDB field names, and a
+ * sentence's full stops would be read as a nested path.
  */
 export function highlightKey(quote: string): string {
-  return normalizeQuote(quote).slice(0, 120);
+  const text = normalizeQuote(quote).slice(0, 200);
+  // Two FNV-1a passes with different seeds, for 64 bits of room.
+  let a = 0x811c9dc5;
+  let b = 0x01000193;
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    a = Math.imul(a ^ code, 0x01000193);
+    b = Math.imul(b ^ code, 0x85ebca6b);
+  }
+  return `h${(a >>> 0).toString(16).padStart(8, "0")}${(b >>> 0).toString(16).padStart(8, "0")}`;
 }
 
 /** Locates a quote inside a page, falling back to a prefix when the tail was truncated. */
@@ -129,6 +143,7 @@ export function buildHighlightedDocument(
         severity: finding.severity ?? "important",
         title: finding.title,
         detail: finding.detail,
+        quote: finding.quote,
         date: finding.date,
       };
       counts[kind] += 1;
