@@ -53,10 +53,11 @@ describe("agent stop, go, and deletion by cannon", () => {
     expect(agentLink()).toHaveAttribute("href", "/agents/agent-1");
   });
 
-  it("fires the agent out of the cannon when Remove is confirmed", async () => {
+  it("fires a non-final agent out of the cannon when Remove is confirmed", async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
     vi.stubGlobal("fetch", fetchMock);
-    render(<AgentGarden agents={[agent]} />);
+    // Two agents, so the cannon handles it rather than the send-off cutscene.
+    render(<AgentGarden agents={[agent, { ...agent, id: "agent-2", name: "Lease agent" }]} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Manage Auto insurance agent" }));
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
@@ -67,5 +68,38 @@ describe("agent stop, go, and deletion by cannon", () => {
       expect(fetchMock).toHaveBeenCalledWith("/api/agents/agent-1", expect.objectContaining({ method: "DELETE" })),
     );
   });
-});
 
+  it("carries the last agent off, boots the cannon, then restores the home screen", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AgentGarden agents={[agent]} />);
+
+    // Each beat schedules the next from its own effect, so the clock has to be
+    // advanced in steps for React to commit in between.
+    const tick = async (times: number) => {
+      for (let i = 0; i < times; i += 1) {
+        await act(async () => { vi.advanceTimersByTime(1000); });
+      }
+    };
+
+    fireEvent.click(screen.getByRole("button", { name: "Manage Auto insurance agent" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Remove$/ }));
+
+    // The agent is carried off before the deletion is made real.
+    await tick(2);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await tick(4);
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith("/api/agents/agent-1", expect.objectContaining({ method: "DELETE" })),
+    );
+
+    // The garden holds its breath until the cannon has been kicked away.
+    expect(screen.queryByText("Your document agents live here")).not.toBeInTheDocument();
+
+    await tick(6);
+    expect(screen.getByText("Your document agents live here")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create a new agent" })).toBeInTheDocument();
+  });
+});

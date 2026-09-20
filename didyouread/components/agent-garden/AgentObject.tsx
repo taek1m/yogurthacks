@@ -43,6 +43,7 @@ export function AgentObject({
   onSavePosition,
   onRename,
   onRemove,
+  onAbduct,
 }: {
   agent: DocumentAgent;
   index: number;
@@ -54,6 +55,8 @@ export function AgentObject({
   onSavePosition: (id: string, position: GardenPosition) => Promise<void>;
   onRename: (id: string, name: string) => Promise<void>;
   onRemove: (id: string) => Promise<void>;
+  /** Set only for the very last agent: it is taken by hand, not by cannon. */
+  onAbduct?: (id: string, at: GardenPosition) => void;
 }) {
   const [home, setHome] = useState(agent.position ?? getStablePosition(index));
   const [menuOpen, setMenuOpen] = useState(false);
@@ -398,8 +401,12 @@ export function AgentObject({
       return;
     }
     if (droppedInCannon) {
-      // Already at the muzzle: skip the walk and load the shot straight away.
       window.setTimeout(() => { suppressClick.current = false; }, 0);
+      if (onAbduct) {
+        onAbduct(agent.id, position.current);
+        return;
+      }
+      // Already at the muzzle: skip the walk and load the shot straight away.
       setLaunch("load");
       return;
     }
@@ -487,6 +494,10 @@ export function AgentObject({
     setMode(null);
     setError("");
     setWalking(false);
+    if (onAbduct) {
+      onAbduct(agent.id, position.current);
+      return;
+    }
     setLaunch(cannonPoint() ? "march" : "load");
   }
 

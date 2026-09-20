@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { AgentObject } from "@/components/agent-garden/AgentObject";
 import { AgentSidebar } from "@/components/agent-garden/AgentSidebar";
 import { Cannon } from "@/components/agent-garden/Cannon";
+import { LastAgentCutscene } from "@/components/agent-garden/LastAgentCutscene";
 import { CreateAgentObject } from "@/components/agent-garden/CreateAgentObject";
 import type { DocumentAgent, GardenPosition } from "@/types/agent";
 
@@ -15,7 +16,29 @@ export function AgentGarden({ agents: initialAgents }: { agents: DocumentAgent[]
   const [cannonArmed, setCannonArmed] = useState(false);
   const [spotlightId, setSpotlightId] = useState<string | null>(null);
   const [blastKey, setBlastKey] = useState(0);
-  const empty = agents.length === 0;
+  // The send-off for the very last agent, and the state it leaves behind.
+  const [abduction, setAbduction] = useState<{ agent: DocumentAgent; at: GardenPosition } | null>(null);
+  const [cannonKicked, setCannonKicked] = useState(false);
+  const empty = agents.length === 0 && !abduction;
+  const lastOne = agents.length === 1;
+
+  function beginAbduction(id: string, at: GardenPosition) {
+    const agent = agents.find((item) => item.id === id);
+    if (!agent) return;
+    setAbduction({ agent, at });
+  }
+
+  /** The agent is off-screen: make the deletion real and clear the garden. */
+  async function finishAbduction() {
+    const taken = abduction?.agent;
+    if (!taken) return;
+    try {
+      await removeAgent(taken.id);
+    } catch {
+      // The character is already gone from view; drop it locally either way.
+      setAgents((current) => current.filter((item) => item.id !== taken.id));
+    }
+  }
 
   async function patchAgent(id: string, updates: { name?: string; position?: GardenPosition }) {
     const response = await fetch(`/api/agents/${id}`, {
@@ -80,9 +103,10 @@ export function AgentGarden({ agents: initialAgents }: { agents: DocumentAgent[]
             <p className="mt-3 max-w-md text-sm leading-6 text-[#214b31] sm:text-base">Create an agent from a topic, or upload a PDF for document-specific analysis. Every conversation is saved to its own garden object.</p>
             <div className="mt-7"><CreateAgentObject /></div>
           </div>
-        ) : (
+        ) : null}
+        {(agents.length > 0 || abduction) && (
           <div ref={gardenRef} className="relative z-10 mx-auto grid w-full max-w-[1500px] grid-cols-2 content-start gap-x-4 gap-y-10 px-5 pb-16 pt-16 sm:grid-cols-3 sm:px-8 md:block md:min-h-[650px] md:pt-0">
-            {agents.map((agent, index) => (
+            {agents.filter((agent) => agent.id !== abduction?.agent.id).map((agent, index) => (
               <AgentObject
                 key={agent.id}
                 agent={agent}
@@ -95,12 +119,22 @@ export function AgentGarden({ agents: initialAgents }: { agents: DocumentAgent[]
                 onSavePosition={(id, position) => patchAgent(id, { position })}
                 onRename={(id, name) => patchAgent(id, { name })}
                 onRemove={removeAgent}
+                onAbduct={lastOne ? beginAbduction : undefined}
               />
             ))}
             <div ref={cannonRef} className="pointer-events-none absolute bottom-6 left-4 z-20 hidden md:block">
-              <Cannon armed={cannonArmed} blastKey={blastKey} />
+              <Cannon armed={cannonArmed} blastKey={blastKey} kicked={cannonKicked} />
             </div>
-            <CreateAgentObject compact />
+            {agents.length > 0 && <CreateAgentObject compact />}
+            {abduction && (
+              <LastAgentCutscene
+                victim={abduction.agent}
+                victimAt={abduction.at}
+                onHauled={finishAbduction}
+                onCannonKicked={() => setCannonKicked(true)}
+                onFinished={() => { setAbduction(null); setCannonKicked(false); }}
+              />
+            )}
           </div>
         )}
       </div>

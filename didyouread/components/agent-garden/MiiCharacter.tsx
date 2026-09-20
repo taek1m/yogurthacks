@@ -20,9 +20,12 @@ interface MiiCharacterProps {
   isResting?: boolean;   // 일시정지 → 바닥에 앉아서 쉬는 자세
   hasWings?: boolean;    // 사이드바에서 선택되어 날아오르는 중
   flipped?: boolean;     // 왼쪽을 볼 때 부모가 좌우 반전 → 글자/말풍선만 되돌림
+  isBandit?: boolean;    // 마지막 에이전트를 데려가는 납치범
+  shirt?: string;        // 셔츠 색 직접 지정 (납치범용)
+  silent?: boolean;      // 들려 있어도 말풍선은 띄우지 않음 (옆으로 눕는 연출용)
 }
 
-export function MiiCharacter({ isHeld, docType, isWalking = true, isCrying = false, isResting = false, hasWings = false, flipped = false }: MiiCharacterProps) {
+export function MiiCharacter({ isHeld, docType, isWalking = true, isCrying = false, isResting = false, hasWings = false, flipped = false, isBandit = false, shirt, silent = false }: MiiCharacterProps) {
 const [step, setStep] = useState(0);
 
   // 평상시 걸어다니는 다리 교차 애니메이션 타이머
@@ -34,7 +37,7 @@ const [step, setStep] = useState(0);
     return () => clearInterval(interval);
   }, [isHeld, isWalking]);
 
-  const shirtColor = SHIRT_COLORS[docType ?? "general"] ?? SHIRT_COLORS.general;
+  const shirtColor = shirt ?? SHIRT_COLORS[docType ?? "general"] ?? SHIRT_COLORS.general;
 
   const striding = !isHeld && isWalking && !isResting;
   const legLeftAngle = striding
@@ -46,24 +49,24 @@ const [step, setStep] = useState(0);
 
   return (
     <div className="relative flex flex-col items-center select-none pointer-events-none">
-      {/* 1. 잡혔을 때 머리 위에 뜨는 말풍선 */}
-      {isHeld && (
-        <div
-          className="absolute -top-10 left-1/2 z-40 bg-white border-2 border-black rounded-2xl px-2.5 py-1 shadow-lg text-[11px] font-black text-red-600 whitespace-nowrap animate-pulse"
-          // 머리 위 정중앙에 고정. 왼쪽을 볼 때 부모가 뒤집으므로 글자만 되돌린다.
-          style={{ transform: flipped ? "translateX(-50%) scaleX(-1)" : "translateX(-50%)" }}
-        >
-          LET ME GO! 💦
-          <div className="absolute left-1/2 -bottom-1.5 -ml-1 w-2 h-2 bg-white border-b-2 border-r-2 border-black rotate-45" />
-        </div>
-      )}
-
-      {/* 2. Mii 캐릭터 본체 */}
+      {/* Mii 캐릭터 본체 */}
       <div
         className={`relative transition-all duration-300 ${isHeld ? "-translate-y-6 scale-105" : ""} ${
           hasWings ? "[animation:miiFly_1.4s_ease-in-out_infinite]" : ""
         }`}
       >
+        {/* 말풍선은 몸통과 같은 래퍼 안에 둔다. 잡히면 몸이 24px 떠오르는데
+            바깥에 두면 머리가 말풍선을 뚫고 올라온다. */}
+        {isHeld && !silent && (
+          <div
+            className="absolute -top-8 left-1/2 z-40 bg-white border-2 border-black rounded-2xl px-2.5 py-1 shadow-lg text-[11px] font-black text-red-600 whitespace-nowrap animate-pulse"
+            // 왼쪽을 볼 때 부모가 뒤집으므로 글자만 되돌린다.
+            style={{ transform: flipped ? "translateX(-50%) scaleX(-1)" : "translateX(-50%)" }}
+          >
+            LET ME GO! 💦
+            <div className="absolute left-1/2 -bottom-1.5 -ml-1 w-2 h-2 bg-white border-b-2 border-r-2 border-black rotate-45" />
+          </div>
+        )}
         <svg width="76" height="96" viewBox="0 0 76 96" className="overflow-visible">
           {/* 날개 (사이드바에서 선택됐을 때만) */}
           {hasWings && (
@@ -233,6 +236,13 @@ const [step, setStep] = useState(0);
                 <ellipse cx="50" cy="33" rx="2" ry="1" fill="#f87171" opacity={0.6} />
                 {/* 온화한 미소 입 */}
                 <path d="M34 36 Q38 40 42 36" stroke="#222" strokeWidth="2" fill="none" strokeLinecap="round" />
+              </>
+            )}
+            {isBandit && (
+              <>
+                {/* 눈가리개 복면 */}
+                <rect x="17" y="22" width="42" height="9" rx="2.5" fill="#1b1b1b" />
+                <path d="M17 24 L10 20 M59 24 L66 20" stroke="#1b1b1b" strokeWidth="3" strokeLinecap="round" />
               </>
             )}
           </g>

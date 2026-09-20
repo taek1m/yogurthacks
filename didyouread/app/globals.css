@@ -100,3 +100,20 @@ textarea {
   0%, 100% { opacity: 0.55; }
   50% { opacity: 0.85; }
 }
+
+/* The last agent's send-off: the cannon gets booted out of the garden. */
+@keyframes cannonKicked {
+  0% { transform: translate(0, 0) rotate(0deg); }
+  25% { transform: translate(-60px, -120px) rotate(-90deg); }
+  100% { transform: translate(-420px, 120px) rotate(-540deg); opacity: 0; }
+}
+
+@keyframes banditHop {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-9px); }
+}
+
+@keyframes prizeWobble {
+  0%, 100% { transform: rotate(-3deg); }
+  50% { transform: rotate(3deg); }
+}

@@ -4,11 +4,13 @@
  * The garden's delete target. Drag an agent into the muzzle, or press Remove and
  * watch the agent walk itself in. Either way the shot is what actually deletes it.
  */
-export function Cannon({ armed, blastKey }: { armed: boolean; blastKey: number }) {
+export function Cannon({ armed, blastKey, kicked = false }: { armed: boolean; blastKey: number; kicked?: boolean }) {
   return (
     <div
       aria-hidden="true"
-      className={`relative transition-transform duration-200 ${armed ? "scale-110" : "scale-100"}`}
+      className={`relative transition-transform duration-200 ${armed ? "scale-110" : "scale-100"} ${
+        kicked ? "[animation:cannonKicked_0.9s_cubic-bezier(0.3,0.1,0.6,1)_forwards]" : ""
+      }`}
     >
       {/* Muzzle flash and smoke, replayed on every shot by keying off blastKey. */}
       {blastKey > 0 && (
