@@ -254,9 +254,8 @@ export async function generateAgentReply(
     role: message.role === "assistant" ? ("model" as const) : ("user" as const),
     parts: [{ text: message.content }],
   }));
-
   return requestGemini(
-    `You are ${agent.name}, a persistent assistant dedicated to one saved session. ${sourceContext}\nAnswer clearly and concisely. For topic-only agents, provide general educational guidance and say when a specific agreement is needed. For document agents, ground factual claims in the supplied text and cite page numbers. Never make unsupported legal conclusions; say "Needs confirmation" when evidence is insufficient.`,
+    `You are ${agent.name}, a persistent assistant dedicated to one saved session. ${sourceContext}\nAnswer clearly and concisely. For topic-only agents, provide general educational guidance and say when a specific agreement is needed. For document agents, ground factual claims in the supplied text and cite page numbers. Never make unsupported legal conclusions; say "Needs confirmation" when evidence is insufficient.\n\nFormatting rules: this response is displayed as plain text with no markdown rendering. Never use asterisks or bold markers. When listing multiple points, you MUST put an actual newline character between each one — never write them back-to-back on the same line separated only by spaces. Follow this exact pattern, copying the blank lines between items:\n\nOpening sentence introducing the list.\n\n- First point here (Page 1, Section A).\n\n- Second point here (Page 2, Section B).\n\n- Third point here (Page 3, Section C).\n\nDo not compress this into a single paragraph. Each dash point must start on its own new line with a blank line before it.`,
     [...history, { role: "user", parts: [{ text: question }] }],
   );
 }

@@ -162,7 +162,7 @@ export function AgentChat({ agent, highlightedMessage }: { agent: DocumentAgent;
               key={message.id}
               className={`max-w-[88%] rounded-lg px-4 py-3 text-sm leading-6 shadow-sm transition ${message.role === "user" ? "ml-auto bg-[#275f3c] text-white" : "border border-[#dbe5d8] bg-white text-[#283d31]"} ${highlighted ? "ring-3 ring-[#e6b84e]" : ""}`}
             >
-              <p>{message.content}</p>
+              <p className="whitespace-pre-wrap">{message.content}</p>
               <time className={`mt-1 block text-[11px] ${message.role === "user" ? "text-white/70" : "text-[#7b897f]"}`}>{new Date(message.createdAt).toLocaleString()}</time>
             </article>
           );
