@@ -24,21 +24,47 @@ export interface TopicAgentProfile {
   suggestedQuestions: string[];
 }
 
+// The free tier caps requests per day PER MODEL, so a spent model is not the end
+// of the road: roll to the next one. Lite models come first, they are the cheapest
+// and fastest for the short, structured answers this app asks for.
+const MODEL_CHAIN = [
+  "gemini-flash-lite-latest",
+  "gemini-3.5-flash-lite",
+  "gemini-3.1-flash-lite",
+  "gemini-flash-latest",
+  "gemini-3.8-flash",
+];
+
 function getGeminiConfig() {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_NOT_CONFIGURED");
-  return {
-    apiKey,
-    model: process.env.GEMINI_MODEL || "gemini-3.8-flash",
-  };
+  const preferred = process.env.GEMINI_MODEL;
+  const models = preferred
+    ? [preferred, ...MODEL_CHAIN.filter((model) => model !== preferred)]
+    : MODEL_CHAIN;
+  return { apiKey, models };
 }
 
-async function requestGemini(
+// A genuinely overloaded backend recovers in seconds, so one quick retry is worth
+// it. A 429 never does: it means this model's daily free quota is spent, and
+// retrying only burns more of the next model's budget. Move on instead.
+const RETRY_ONCE_STATUS = new Set([500, 502, 503, 504]);
+
+interface GeminiRequestError extends Error {
+  status?: number;
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function callGemini(
+  model: string,
+  apiKey: string,
   systemInstruction: string,
   contents: Array<{ role: "user" | "model"; parts: Array<{ text: string }> }>,
   generationConfig?: Record<string, unknown>,
 ): Promise<string> {
-  const { apiKey, model } = getGeminiConfig();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
 
@@ -60,20 +86,49 @@ async function requestGemini(
       },
     );
     const payload = (await response.json()) as GeminiResponse;
-    if (!response.ok) throw new Error(payload.error?.message || "Gemini request failed");
+    if (!response.ok) {
+      const error: GeminiRequestError = new Error(
+        payload.error?.message || `Gemini request failed (${response.status})`,
+      );
+      error.status = response.status;
+      throw error;
+    }
     const text = payload.candidates?.[0]?.content?.parts
       ?.map((part) => part.text || "")
       .join("")
       .trim();
     if (!text) throw new Error("Gemini returned an empty response");
     return text;
-  } catch (error) {
-    if (error instanceof Error && error.message === "GEMINI_NOT_CONFIGURED") throw error;
-    console.error("Gemini request failed", error);
-    throw new Error("GEMINI_UNAVAILABLE");
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function requestGemini(
+  systemInstruction: string,
+  contents: Array<{ role: "user" | "model"; parts: Array<{ text: string }> }>,
+  generationConfig?: Record<string, unknown>,
+): Promise<string> {
+  const { apiKey, models } = getGeminiConfig();
+  let lastError: unknown;
+  let outOfQuota = false;
+
+  for (const model of models) {
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        return await callGemini(model, apiKey, systemInstruction, contents, generationConfig);
+      } catch (error) {
+        lastError = error;
+        const status = (error as GeminiRequestError).status;
+        if (status === 429) outOfQuota = true;
+        if (status === undefined || !RETRY_ONCE_STATUS.has(status)) break;
+        if (attempt === 1) await delay(600);
+      }
+    }
+  }
+
+  console.error("Gemini request failed", lastError);
+  throw new Error(outOfQuota ? "GEMINI_QUOTA" : "GEMINI_UNAVAILABLE");
 }
 
 export async function createTopicAgentProfile(topic: string): Promise<TopicAgentProfile> {
@@ -153,6 +208,15 @@ export function geminiErrorResponse(error: unknown): Response | null {
     return Response.json(
       { error: "Gemini is not configured. Add GEMINI_API_KEY to the server environment." },
       { status: 503 },
+    );
+  }
+  if (error.message === "GEMINI_QUOTA") {
+    return Response.json(
+      {
+        error:
+          "Every Gemini model has hit its free daily request limit. Try again tomorrow, or add billing to the API key.",
+      },
+      { status: 429 },
     );
   }
   if (error.message === "GEMINI_UNAVAILABLE") {

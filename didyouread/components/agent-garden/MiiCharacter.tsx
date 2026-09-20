@@ -2,6 +2,16 @@
 
 import React, { useEffect, useState } from "react";
 
+// 서류 종류별 셔츠 색
+const SHIRT_COLORS: Record<string, string> = {
+  auto_insurance: "#316094",
+  renters_insurance: "#5b5192",
+  apartment_lease: "#e66025",
+  school_payment: "#7a5c12",
+  bank: "#2b7352",
+  general: "#44783e",
+};
+
 interface MiiCharacterProps {
   isHeld: boolean;       // 길게 눌려 장갑에 잡혀있는 상태 (pressing 또는 dragging)
   docType?: string;      // 셔츠 색상 커스터마이징용
@@ -21,11 +31,7 @@ const [step, setStep] = useState(0);
     return () => clearInterval(interval);
   }, [isHeld, isWalking]);
 
-  // 서류 종류별 옷 색상 지정
-  const shirtColor =
-    docType === "auto_insurance" ? "#316094" :
-    docType === "apartment_lease" ? "#e66025" :
-    docType === "bank" ? "#2b7352" : "#44783e";
+  const shirtColor = SHIRT_COLORS[docType ?? "general"] ?? SHIRT_COLORS.general;
 
   const striding = !isHeld && isWalking;
   const legLeftAngle = striding

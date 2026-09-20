@@ -16,7 +16,15 @@ export async function getMongoClient(): Promise<MongoClient> {
   }
 
   if (!global.__agentGardenMongoClient) {
-    global.__agentGardenMongoClient = new MongoClient(uri).connect();
+    // Never cache a rejected promise: one failed connect (asleep laptop, a
+    // network switch, an Atlas hiccup) would otherwise replay the same error on
+    // every later request until the server is restarted. Drop it and retry.
+    global.__agentGardenMongoClient = new MongoClient(uri)
+      .connect()
+      .catch((error) => {
+        global.__agentGardenMongoClient = undefined;
+        throw error;
+      });
   }
 
   return global.__agentGardenMongoClient;
