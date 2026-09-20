@@ -1,4 +1,4 @@
-import { PDFParse } from "pdf-parse";
+import { extractText, getDocumentProxy } from "unpdf";
 import type { DocumentPage } from "@/types/agent";
 
 export const MAX_PDF_BYTES = 5 * 1024 * 1024;
@@ -18,6 +18,11 @@ export class PdfError extends Error {
 /**
  * Validates and extracts the text of an uploaded PDF. Shared by agent creation
  * and by adding a document to an agent that already exists.
+ *
+ * Uses unpdf instead of pdf-parse: pdf-parse wraps pdfjs-dist in a way that
+ * references browser-only globals (DOMMatrix) at import time, which crashes
+ * on Vercel's serverless runtime even though it works locally. unpdf ships
+ * a serverless-safe build of PDF.js with zero native dependencies.
  */
 export async function readPdfUpload(
   form: FormData,
@@ -35,18 +40,27 @@ export async function readPdfUpload(
     throw new PdfError("This file does not appear to be a valid PDF", 400);
   }
 
-  const parser = new PDFParse({ data });
-  let result;
+  let totalPages: number;
+  let pageTexts: string[];
   try {
-    result = await parser.getText();
-  } finally {
-    await parser.destroy();
+    const pdf = await getDocumentProxy(data);
+    const result = await extractText(pdf, { mergePages: false });
+    totalPages = result.totalPages;
+    // mergePages: false returns string[], one entry per page
+    pageTexts = Array.isArray(result.text) ? result.text : [result.text];
+  } catch (error) {
+    throw new PdfError("Could not read this PDF. It may be corrupted or encrypted.", 422);
   }
 
-  if (result.total > MAX_PDF_PAGES) {
+  if (totalPages > MAX_PDF_PAGES) {
     throw new PdfError(`PDFs may contain at most ${MAX_PDF_PAGES} pages`, 400);
   }
-  const pages = result.pages.map((page) => ({ page: page.num, text: page.text.trim() }));
+
+  const pages: DocumentPage[] = pageTexts.map((text, index) => ({
+    page: index + 1,
+    text: text.trim(),
+  }));
+
   if (!pages.some((page) => page.text.length > 0)) {
     throw new PdfError("No readable text was found. Upload a text-based PDF.", 422);
   }
