@@ -4,6 +4,7 @@ import { Cloud, Sprout } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { AgentObject } from "@/components/agent-garden/AgentObject";
 import { AgentSidebar } from "@/components/agent-garden/AgentSidebar";
+import { SPOTLIGHT_EVENT, takeSpotlightRequest } from "@/components/agent-garden/gardenEvents";
 import { Cannon } from "@/components/agent-garden/Cannon";
 import { LastAgentCutscene } from "@/components/agent-garden/LastAgentCutscene";
 import { CreateAgentObject } from "@/components/agent-garden/CreateAgentObject";
@@ -51,6 +52,21 @@ export function AgentGarden({ agents: initialAgents }: { agents: DocumentAgent[]
     setAgents((current) => current.map((agent) => agent.id === id ? result.agent! : agent));
     window.dispatchEvent(new Event("agent-garden:changed"));
   }
+
+  // A pick from the header search, made here or on the way back from another page.
+  useEffect(() => {
+    const claim = () => {
+      const id = takeSpotlightRequest();
+      if (id) setSpotlightId(id);
+    };
+    // A beat so the agents have settled into their positions first.
+    const timer = window.setTimeout(claim, 350);
+    window.addEventListener(SPOTLIGHT_EVENT, claim);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener(SPOTLIGHT_EVENT, claim);
+    };
+  }, []);
 
   // The spotlight is a moment, not a mode: it fades on its own.
   useEffect(() => {
@@ -125,7 +141,6 @@ export function AgentGarden({ agents: initialAgents }: { agents: DocumentAgent[]
             <div ref={cannonRef} className="pointer-events-none absolute bottom-6 left-4 z-20 hidden md:block">
               <Cannon armed={cannonArmed} blastKey={blastKey} kicked={cannonKicked} />
             </div>
-            {agents.length > 0 && <CreateAgentObject compact />}
             {abduction && (
               <LastAgentCutscene
                 victim={abduction.agent}

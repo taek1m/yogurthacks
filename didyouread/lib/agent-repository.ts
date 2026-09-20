@@ -3,11 +3,14 @@ import { getDatabase, isMongoConfigured } from "@/lib/mongodb";
 import type {
   AgentAnalysis,
   AgentMessage,
+  HighlightOverride,
+  AgentTask,
   AgentSearchResult,
   DocumentAgent,
   DocumentPage,
   StoredDocumentAgent,
   GardenPosition,
+  TaskWithAgent,
 } from "@/types/agent";
 
 declare global {
@@ -160,6 +163,130 @@ export async function addAgentDocument(
   const result = await (await collection()).findOneAndUpdate(
     { ownerId, id },
     { $set: { ...fields, updatedAt }, $push: { messages: message } },
+    { returnDocument: "after" },
+  );
+  return result ? publicAgent(result) : null;
+}
+
+/** Every saved task across the garden, soonest due first, undated last. */
+export async function listTasks(ownerId: string): Promise<TaskWithAgent[]> {
+  const records = !isMongoConfigured()
+    ? memory.filter((agent) => agent.ownerId === ownerId)
+    : await (await collection()).find({ ownerId, tasks: { $exists: true, $ne: [] } }).toArray();
+
+  return records
+    .flatMap((agent) =>
+      (agent.tasks ?? []).map((task) => ({
+        ...task,
+        agentId: agent.id,
+        agentName: agent.name,
+        documentName: agent.documentName,
+      })),
+    )
+    .sort((a, b) => {
+      if (a.done !== b.done) return a.done ? 1 : -1;
+      if (a.dueDate && b.dueDate) return a.dueDate.localeCompare(b.dueDate);
+      if (a.dueDate) return -1;
+      if (b.dueDate) return 1;
+      return a.createdAt.localeCompare(b.createdAt);
+    });
+}
+
+export async function addTasks(
+  ownerId: string,
+  agentId: string,
+  tasks: AgentTask[],
+): Promise<TaskWithAgent[] | null> {
+  if (tasks.length === 0) return [];
+  const updatedAt = new Date().toISOString();
+
+  if (!isMongoConfigured()) {
+    const agent = memory.find((item) => item.ownerId === ownerId && item.id === agentId);
+    if (!agent) return null;
+    agent.tasks = [...(agent.tasks ?? []), ...tasks];
+    agent.updatedAt = updatedAt;
+    return tasks.map((task) => ({ ...task, agentId, agentName: agent.name, documentName: agent.documentName }));
+  }
+
+  const result = await (await collection()).findOneAndUpdate(
+    { ownerId, id: agentId },
+    { $push: { tasks: { $each: tasks } }, $set: { updatedAt } },
+    { returnDocument: "after" },
+  );
+  if (!result) return null;
+  return tasks.map((task) => ({
+    ...task,
+    agentId,
+    agentName: result.name,
+    documentName: result.documentName,
+  }));
+}
+
+export async function setTaskDone(
+  ownerId: string,
+  taskId: string,
+  done: boolean,
+): Promise<boolean> {
+  if (!isMongoConfigured()) {
+    for (const agent of memory) {
+      if (agent.ownerId !== ownerId) continue;
+      const task = agent.tasks?.find((item) => item.id === taskId);
+      if (!task) continue;
+      task.done = done;
+      return true;
+    }
+    return false;
+  }
+  const result = await (await collection()).updateOne(
+    { ownerId, "tasks.id": taskId },
+    { $set: { "tasks.$.done": done } },
+  );
+  return result.matchedCount === 1;
+}
+
+export async function deleteTask(ownerId: string, taskId: string): Promise<boolean> {
+  if (!isMongoConfigured()) {
+    for (const agent of memory) {
+      if (agent.ownerId !== ownerId) continue;
+      const before = agent.tasks?.length ?? 0;
+      agent.tasks = (agent.tasks ?? []).filter((item) => item.id !== taskId);
+      if (agent.tasks.length !== before) return true;
+    }
+    return false;
+  }
+  const result = await (await collection()).updateOne(
+    { ownerId, "tasks.id": taskId },
+    { $pull: { tasks: { id: taskId } } },
+  );
+  return result.modifiedCount === 1;
+}
+
+/** Records one reader edit to a highlight, keyed by the sentence it quotes. */
+export async function setHighlightOverride(
+  ownerId: string,
+  id: string,
+  key: string,
+  override: HighlightOverride | null,
+): Promise<DocumentAgent | null> {
+  const updatedAt = new Date().toISOString();
+  const field = `highlightOverrides.${key}`;
+
+  if (!isMongoConfigured()) {
+    const agent = memory.find((item) => item.ownerId === ownerId && item.id === id);
+    if (!agent) return null;
+    const all = { ...(agent.highlightOverrides ?? {}) };
+    if (override) all[key] = override;
+    else delete all[key];
+    agent.highlightOverrides = all;
+    agent.updatedAt = updatedAt;
+    return publicAgent(agent);
+  }
+
+  const result = await (await collection()).findOneAndUpdate(
+    { ownerId, id },
+    override
+      ? { $set: { [field]: override, updatedAt } }
+      : { $unset: { [field]: "" }, $set: { updatedAt } },
     { returnDocument: "after" },
   );
   return result ? publicAgent(result) : null;

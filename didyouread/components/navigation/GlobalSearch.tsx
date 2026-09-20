@@ -1,7 +1,9 @@
 "use client";
 
 import { LoaderCircle, Search, X } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { requestSpotlight } from "@/components/agent-garden/gardenEvents";
 import { SearchResults } from "@/components/navigation/SearchResults";
 import type { AgentSearchResult } from "@/types/agent";
 
@@ -12,6 +14,8 @@ export function GlobalSearch() {
   const [results, setResults] = useState(emptyResults);
   const [state, setState] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const container = useRef<HTMLDivElement>(null);
+  const router = useRouter();
+  const pathname = usePathname();
 
   useEffect(() => {
     const onPointerDown = (event: PointerEvent) => {
@@ -40,6 +44,15 @@ export function GlobalSearch() {
       controller.abort();
     };
   }, [query]);
+
+  /** Send the agent up into the spotlight instead of opening its chat. */
+  function pickAgent(agentId: string) {
+    setQuery("");
+    setResults(emptyResults);
+    setState("idle");
+    requestSpotlight(agentId);
+    if (pathname !== "/") router.push("/");
+  }
 
   function updateQuery(value: string) {
     setQuery(value);
@@ -72,7 +85,7 @@ export function GlobalSearch() {
           <button type="button" aria-label="Clear search" onClick={() => updateQuery("")} className="absolute right-2 top-1/2 grid size-7 -translate-y-1/2 place-items-center rounded text-[#668070] hover:bg-[#e8f0e6]"><X size={16} /></button>
         ) : null}
       </label>
-      {state !== "idle" && <SearchResults results={results} state={state} />}
+      {state !== "idle" && <SearchResults results={results} state={state} onPickAgent={pickAgent} />}
     </div>
   );
 }

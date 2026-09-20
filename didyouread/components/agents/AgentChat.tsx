@@ -4,6 +4,7 @@ import { FileText, LoaderCircle, Paperclip, Send, Sparkles, Upload } from "lucid
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { AgentSummary } from "@/components/agents/AgentSummary";
+import { notifyTodosChanged } from "@/components/navigation/HeaderPanels";
 import type { AgentMessage, DocumentAgent } from "@/types/agent";
 
 export function AgentChat({ agent, highlightedMessage }: { agent: DocumentAgent; highlightedMessage?: string }) {
@@ -14,7 +15,7 @@ export function AgentChat({ agent, highlightedMessage }: { agent: DocumentAgent;
   const [documentNames, setDocumentNames] = useState(agent.documentNames ?? [agent.documentName]);
   const [attaching, setAttaching] = useState(false);
   const [dropping, setDropping] = useState(false);
-  const end = useRef<HTMLDivElement>(null);
+  const stream = useRef<HTMLDivElement>(null);
   // dragenter/dragleave also fire for children, so count them instead of toggling.
   const dragDepth = useRef(0);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -26,6 +27,16 @@ export function AgentChat({ agent, highlightedMessage }: { agent: DocumentAgent;
       document.getElementById(`message-${highlightedMessage}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
     }
   }, [highlightedMessage]);
+
+  /**
+   * Scrolls the message list itself. scrollIntoView would drag every scrollable
+   * ancestor along with it, which yanks the whole page to the top.
+   */
+  function scrollToLatest(smooth = true) {
+    const list = stream.current;
+    if (!list) return;
+    list.scrollTo({ top: list.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+  }
 
   function isPdf(file: File) {
     return file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
@@ -79,7 +90,7 @@ export function AgentChat({ agent, highlightedMessage }: { agent: DocumentAgent;
       window.dispatchEvent(new Event("agent-garden:changed"));
       // Repaint the marked-up panel, which is rendered on the server.
       router.refresh();
-      window.setTimeout(() => end.current?.scrollIntoView({ behavior: "smooth" }), 50);
+      window.setTimeout(() => scrollToLatest(), 50);
     } catch (attachError) {
       setError(attachError instanceof Error ? attachError.message : "The PDF could not be added");
     } finally {
@@ -98,20 +109,38 @@ export function AgentChat({ agent, highlightedMessage }: { agent: DocumentAgent;
     event.preventDefault();
     const content = question.trim();
     if (!content || sending) return;
+
+    // Show the question straight away and let the agent think out loud, rather
+    // than holding the message back until the whole reply has arrived.
+    const pendingId = `pending-${crypto.randomUUID()}`;
+    const pending: AgentMessage = {
+      id: pendingId,
+      role: "user",
+      content,
+      createdAt: new Date().toISOString(),
+    };
+    setMessages((current) => [...current, pending]);
+    setQuestion("");
     setSending(true);
     setError("");
+    window.setTimeout(() => scrollToLatest(), 30);
+
     try {
       const response = await fetch(`/api/agents/${agent.id}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content }),
       });
-      const result = (await response.json()) as { messages?: AgentMessage[]; error?: string };
+      const result = (await response.json()) as { messages?: AgentMessage[]; todos?: unknown[]; error?: string };
       if (!response.ok || !result.messages) throw new Error(result.error || "Message failed");
-      setMessages((current) => [...current, ...result.messages!]);
-      setQuestion("");
-      window.setTimeout(() => end.current?.scrollIntoView({ behavior: "smooth" }), 50);
+      // Swap the local copy for the saved pair, which carries the real ids.
+      setMessages((current) => [...current.filter((message) => message.id !== pendingId), ...result.messages!]);
+      // The agent may have put something on the reader's list while answering.
+      if (result.todos?.length) notifyTodosChanged();
+      window.setTimeout(() => scrollToLatest(), 50);
     } catch (sendError) {
+      setMessages((current) => current.filter((message) => message.id !== pendingId));
+      setQuestion(content);
       setError(sendError instanceof Error ? sendError.message : "Message failed");
     } finally {
       setSending(false);
@@ -120,7 +149,7 @@ export function AgentChat({ agent, highlightedMessage }: { agent: DocumentAgent;
 
   return (
     <section
-      className="relative flex min-h-[calc(100vh-4rem)] min-w-0 flex-col bg-[#fffef9] lg:border-r lg:border-[#dce5d9]"
+      className="relative flex h-[calc(100vh-4rem)] min-w-0 flex-col bg-[#fffef9] lg:border-r lg:border-[#dce5d9]"
       aria-labelledby="agent-title"
       onDragEnter={onDragEnter}
       onDragOver={(event) => { if (hasFiles(event)) event.preventDefault(); }}
@@ -153,7 +182,7 @@ export function AgentChat({ agent, highlightedMessage }: { agent: DocumentAgent;
         }}
       />
 
-      <div className="flex-1 space-y-4 overflow-y-auto px-5 py-6 sm:px-8">
+      <div ref={stream} className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-6 sm:px-8">
         {messages.map((message) => {
           const highlighted = message.id === highlightedMessage;
           return (
@@ -167,7 +196,16 @@ export function AgentChat({ agent, highlightedMessage }: { agent: DocumentAgent;
             </article>
           );
         })}
-        <div ref={end} />
+        {sending && (
+          <article className="max-w-[88%] rounded-lg border border-[#dbe5d8] bg-white px-4 py-3 shadow-sm" aria-live="polite">
+            <span className="sr-only">{agent.name} is writing a reply</span>
+            <span className="flex items-center gap-1.5" aria-hidden="true">
+              <span className="size-2 rounded-full bg-[#7d9585] [animation:chatDot_1.1s_ease-in-out_infinite]" />
+              <span className="size-2 rounded-full bg-[#7d9585] [animation:chatDot_1.1s_0.18s_ease-in-out_infinite]" />
+              <span className="size-2 rounded-full bg-[#7d9585] [animation:chatDot_1.1s_0.36s_ease-in-out_infinite]" />
+            </span>
+          </article>
+        )}
       </div>
 
       <form onSubmit={ask} className="sticky bottom-0 border-t border-[#dce5d9] bg-[#fffef9] p-4 sm:px-8">

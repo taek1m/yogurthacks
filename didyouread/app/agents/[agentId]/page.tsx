@@ -28,10 +28,12 @@ export default async function AgentPage({
 
   return (
     <AgentWorkspace
+      agentId={agent.id}
       chat={<AgentChat agent={agent} highlightedMessage={highlightedMessage} />}
       document={highlighted}
       documentName={agent.documentName}
       documentNames={agent.documentNames}
+      highlightOverrides={agent.highlightOverrides}
     />
   );
 }

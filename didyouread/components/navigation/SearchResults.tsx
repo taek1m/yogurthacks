@@ -2,7 +2,16 @@ import { FileText, MessageSquareText } from "lucide-react";
 import Link from "next/link";
 import type { AgentSearchResult } from "@/types/agent";
 
-export function SearchResults({ results, state }: { results: AgentSearchResult; state: "loading" | "ready" | "error" }) {
+export function SearchResults({
+  results,
+  state,
+  onPickAgent,
+}: {
+  results: AgentSearchResult;
+  state: "loading" | "ready" | "error";
+  /** Agents are shown in the garden rather than opened, so picking one is a button. */
+  onPickAgent: (agentId: string) => void;
+}) {
   const hasResults = results.agents.length > 0 || results.messages.length > 0;
   return (
     <div id="global-search-results" role="region" aria-live="polite" className="absolute left-0 right-0 top-[calc(100%+0.5rem)] z-50 max-h-[70vh] overflow-y-auto rounded-md border border-[#d5e0d1] bg-white p-2 shadow-xl">
@@ -13,10 +22,10 @@ export function SearchResults({ results, state }: { results: AgentSearchResult; 
         <section aria-labelledby="agent-results-title">
           <h2 id="agent-results-title" className="px-3 pb-1 pt-2 text-xs font-bold uppercase text-[#708477]">Agents</h2>
           {results.agents.map((agent) => (
-            <Link key={agent.agentId} href={`/agents/${agent.agentId}`} className="flex items-start gap-3 rounded px-3 py-2 hover:bg-[#eef6ec] focus-visible:outline-2 focus-visible:outline-[#327a4a]">
+            <button key={agent.agentId} type="button" onClick={() => onPickAgent(agent.agentId)} className="flex w-full items-start gap-3 rounded px-3 py-2 text-left hover:bg-[#eef6ec] focus-visible:outline-2 focus-visible:outline-[#327a4a]">
               <FileText size={17} className="mt-0.5 shrink-0 text-[#39734c]" />
-              <span className="min-w-0"><span className="block truncate text-sm font-semibold text-[#183126]">{agent.agentName}</span><span className="block truncate text-xs text-[#65796b]">{agent.documentName}</span></span>
-            </Link>
+              <span className="min-w-0"><span className="block truncate text-sm font-semibold text-[#183126]">{agent.agentName}</span><span className="block truncate text-xs text-[#65796b]">Show in the garden · {agent.documentName}</span></span>
+            </button>
           ))}
         </section>
       )}

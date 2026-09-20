@@ -28,6 +28,13 @@ export interface Finding {
 /** Which analysis section a finding came from. Drives its highlight colour. */
 export type HighlightKind = "concern" | "deadline" | "financial" | "favorable";
 
+/** A reader's correction to one machine-made highlight. */
+export interface HighlightOverride {
+  kind?: HighlightKind;
+  severity?: FindingSeverity;
+  removed?: boolean;
+}
+
 export interface DocumentPage {
   page: number;
   text: string;
@@ -44,6 +51,38 @@ export interface AgentAnalysis {
   suggestedQuestions: Finding[];
 }
 
+/** A job the reader asked to keep track of, saved against the agent it came from. */
+export interface AgentTask {
+  id: string;
+  title: string;
+  detail?: string;
+  /** ISO date (YYYY-MM-DD) when it is due, when the document gives one. */
+  dueDate?: string;
+  done: boolean;
+  createdAt: string;
+}
+
+/** A task plus where it came from, for the header list. */
+export interface TaskWithAgent extends AgentTask {
+  agentId: string;
+  agentName: string;
+  documentName: string;
+}
+
+export interface TodoItem {
+  id: string;
+  ownerId: string;
+  title: string;
+  detail?: string;
+  /** ISO date (YYYY-MM-DD). Undated tasks sort to the bottom. */
+  dueDate?: string;
+  agentId?: string;
+  agentName?: string;
+  done: boolean;
+  createdAt: string;
+  completedAt?: string;
+}
+
 export interface AgentMessage {
   id: string;
   role: "user" | "assistant";
@@ -58,6 +97,8 @@ export interface DocumentAgent {
   documentName: string;
   /** Every PDF this agent answers about, in the order they were added. */
   documentNames?: string[];
+  /** Reader edits to the highlights, keyed by the quoted sentence. */
+  highlightOverrides?: Record<string, HighlightOverride>;
   sourceKind?: "pdf" | "topic";
   topic?: string;
   documentType: DocumentType;
@@ -74,6 +115,7 @@ export interface DocumentAgent {
 
 export interface StoredDocumentAgent extends DocumentAgent {
   extractedPages: DocumentPage[];
+  tasks?: AgentTask[];
 }
 
 export interface AgentSearchResult {

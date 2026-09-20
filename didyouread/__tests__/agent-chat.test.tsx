@@ -50,6 +50,54 @@ describe("chat composer", () => {
     expect(composer()).toHaveValue("");
   });
 
+  it("shows the question immediately and marks the agent as replying", async () => {
+    let release: (value: unknown) => void = () => {};
+    const reply = new Promise((resolve) => { release = resolve; });
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => {
+      await reply;
+      return {
+        ok: true,
+        json: async () => ({
+          messages: [
+            { id: "m1", role: "user", content: "When is rent due?", createdAt: "2026-01-02T00:00:00.000Z" },
+            { id: "m2", role: "assistant", content: "On the first day.", createdAt: "2026-01-02T00:00:01.000Z" },
+          ],
+        }),
+      };
+    }));
+    render(<AgentChat agent={agent} />);
+
+    fireEvent.change(composer(), { target: { value: "When is rent due?" } });
+    fireEvent.keyDown(composer(), { key: "Enter" });
+
+    // The question is on screen before the reply exists.
+    await waitFor(() => expect(screen.getByText("When is rent due?")).toBeInTheDocument());
+    expect(screen.getByText(/is writing a reply/)).toBeInTheDocument();
+    expect(screen.queryByText("On the first day.")).not.toBeInTheDocument();
+
+    release(null);
+    await waitFor(() => expect(screen.getByText("On the first day.")).toBeInTheDocument());
+    expect(screen.queryByText(/is writing a reply/)).not.toBeInTheDocument();
+    // The optimistic copy was swapped for the saved one, not duplicated.
+    expect(screen.getAllByText("When is rent due?")).toHaveLength(1);
+  });
+
+  it("puts the question back in the box when sending fails", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: false,
+      json: async () => ({ error: "Gemini is overloaded" }),
+    }));
+    render(<AgentChat agent={agent} />);
+
+    fireEvent.change(composer(), { target: { value: "When is rent due?" } });
+    fireEvent.keyDown(composer(), { key: "Enter" });
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Gemini is overloaded"));
+    // The bubble is withdrawn (the textarea still holds the text, so scope the check).
+    expect(document.querySelectorAll('article[id^="message-"]')).toHaveLength(0);
+    expect(composer()).toHaveValue("When is rent due?");
+  });
+
   it("keeps Shift+Enter as a newline instead of sending", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

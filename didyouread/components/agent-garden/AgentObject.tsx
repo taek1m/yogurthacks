@@ -504,6 +504,7 @@ export function AgentObject({
   return (
     <div
       ref={wrap}
+      data-agent-object
       className={`relative flex min-w-0 flex-col items-center md:absolute md:left-[var(--agent-x)] md:top-[var(--agent-y)] md:w-52 md:-translate-x-1/2 md:-translate-y-1/2 ${
         spotlight ? "z-20" : ""
       }`}

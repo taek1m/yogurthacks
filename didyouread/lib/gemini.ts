@@ -112,6 +112,7 @@ async function requestGemini(
   const { apiKey, models } = getGeminiConfig();
   let lastError: unknown;
   let outOfQuota = false;
+  let rejectedKey = false;
 
   for (const model of models) {
     for (let attempt = 1; attempt <= 2; attempt += 1) {
@@ -121,6 +122,11 @@ async function requestGemini(
         lastError = error;
         const status = (error as GeminiRequestError).status;
         if (status === 429) outOfQuota = true;
+        // 401/403 means the key itself is bad or expired: no model will accept it.
+        if (status === 401 || status === 403) {
+          rejectedKey = true;
+          break;
+        }
         if (status === undefined || !RETRY_ONCE_STATUS.has(status)) break;
         if (attempt === 1) await delay(600);
       }
@@ -128,6 +134,7 @@ async function requestGemini(
   }
 
   console.error("Gemini request failed", lastError);
+  if (rejectedKey) throw new Error("GEMINI_BAD_KEY");
   throw new Error(outOfQuota ? "GEMINI_QUOTA" : "GEMINI_UNAVAILABLE");
 }
 
@@ -239,10 +246,16 @@ export async function nameDocumentAgent(
   }
 }
 
+export interface AgentReply {
+  reply: string;
+  /** Only filled when the reader asked for something to be put on their list. */
+  todos: Array<{ title: string; detail?: string; dueDate?: string }>;
+}
+
 export async function generateAgentReply(
   agent: StoredDocumentAgent,
   question: string,
-): Promise<string> {
+): Promise<AgentReply> {
   const isTopic = agent.sourceKind === "topic";
   const sourceContext = isTopic
     ? `The saved session topic is: ${agent.topic || agent.documentName}. No source document has been uploaded for this agent.`
@@ -254,10 +267,52 @@ export async function generateAgentReply(
     role: message.role === "assistant" ? ("model" as const) : ("user" as const),
     parts: [{ text: message.content }],
   }));
-  return requestGemini(
-    `You are ${agent.name}, a persistent assistant dedicated to one saved session. ${sourceContext}\nAnswer clearly and concisely. For topic-only agents, provide general educational guidance and say when a specific agreement is needed. For document agents, ground factual claims in the supplied text and cite page numbers. Never make unsupported legal conclusions; say "Needs confirmation" when evidence is insufficient.\n\nFormatting rules: this response is displayed as plain text with no markdown rendering. Never use asterisks or bold markers. When listing multiple points, you MUST put an actual newline character between each one — never write them back-to-back on the same line separated only by spaces. Follow this exact pattern, copying the blank lines between items:\n\nOpening sentence introducing the list.\n\n- First point here (Page 1, Section A).\n\n- Second point here (Page 2, Section B).\n\n- Third point here (Page 3, Section C).\n\nDo not compress this into a single paragraph. Each dash point must start on its own new line with a blank line before it.`,
+  const schema = {
+    type: "object",
+    properties: {
+      reply: { type: "string", description: "The answer to show in the chat, following the formatting rules" },
+      todos: {
+        type: "array",
+        description:
+          "Tasks for the reader's to-do list. Empty unless they asked for something to be added, tracked, remembered, or reminded.",
+        items: {
+          type: "object",
+          properties: {
+            title: { type: "string", description: "Short imperative task, maximum 90 characters" },
+            detail: { type: "string", description: "One line of context, including the amount when there is one" },
+            dueDate: { type: "string", description: "Due date as YYYY-MM-DD. Omit when no date is given." },
+          },
+          required: ["title"],
+        },
+      },
+    },
+    required: ["reply", "todos"],
+  };
+
+  const text = await requestGemini(
+    `You are ${agent.name}, a persistent assistant dedicated to one saved session. ${sourceContext}\nAnswer clearly and concisely. For topic-only agents, provide general educational guidance and say when a specific agreement is needed. For document agents, ground factual claims in the supplied text and cite page numbers. Never make unsupported legal conclusions; say "Needs confirmation" when evidence is insufficient.\n\nFormatting rules: this response is displayed as plain text with no markdown rendering. Never use asterisks or bold markers. When listing multiple points, you MUST put an actual newline character between each one — never write them back-to-back on the same line separated only by spaces. Follow this exact pattern, copying the blank lines between items:\n\nOpening sentence introducing the list.\n\n- First point here (Page 1, Section A).\n\n- Second point here (Page 2, Section B).\n\n- Third point here (Page 3, Section C).\n\nDo not compress this into a single paragraph. Each dash point must start on its own new line with a blank line before it.` + `\n\nToday is ${new Date().toISOString().slice(0, 10)}. Fill "todos" only when the reader asks you to add, track, remember, or be reminded of something; otherwise return an empty array. Put the answer itself in "reply".`,
     [...history, { role: "user", parts: [{ text: question }] }],
+    { responseMimeType: "application/json", responseSchema: schema },
   );
+
+  try {
+    const parsed = JSON.parse(text) as Partial<AgentReply>;
+    if (typeof parsed.reply !== "string" || !parsed.reply.trim()) throw new Error("No reply");
+    return {
+      reply: parsed.reply.trim(),
+      todos: (Array.isArray(parsed.todos) ? parsed.todos : [])
+        .filter((todo): todo is AgentReply["todos"][number] => typeof todo?.title === "string" && todo.title.trim().length > 0)
+        .slice(0, 8)
+        .map((todo) => ({
+          title: todo.title.trim().slice(0, 180),
+          detail: typeof todo.detail === "string" ? todo.detail.trim().slice(0, 400) : undefined,
+          dueDate: typeof todo.dueDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(todo.dueDate) ? todo.dueDate : undefined,
+        })),
+    };
+  } catch {
+    // Structured output is a nicety; a plain answer is still worth showing.
+    return { reply: text, todos: [] };
+  }
 }
 
 export function geminiErrorResponse(error: unknown): Response | null {
@@ -266,6 +321,15 @@ export function geminiErrorResponse(error: unknown): Response | null {
     return Response.json(
       { error: "Gemini is not configured. Add GEMINI_API_KEY to the server environment." },
       { status: 503 },
+    );
+  }
+  if (error.message === "GEMINI_BAD_KEY") {
+    return Response.json(
+      {
+        error:
+          "Gemini rejected the API key. Create one at aistudio.google.com/apikey (it starts with AIza) and set GEMINI_API_KEY. Tokens that start with AQ. expire after a few hours.",
+      },
+      { status: 401 },
     );
   }
   if (error.message === "GEMINI_QUOTA") {

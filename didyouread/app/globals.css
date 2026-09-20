@@ -117,3 +117,9 @@ textarea {
   0%, 100% { transform: rotate(-3deg); }
   50% { transform: rotate(3deg); }
 }
+
+/* The agent thinking out loud while its reply is on the way. */
+@keyframes chatDot {
+  0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-3px); }
+}

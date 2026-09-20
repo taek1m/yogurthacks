@@ -3,12 +3,12 @@
 import { Plus } from "lucide-react";
 import { openTopicAgent } from "@/components/agents/CreateTopicModal";
 
-export function CreateAgentObject({ compact = false }: { compact?: boolean }) {
+export function CreateAgentObject() {
   return (
     <button
       type="button"
       onClick={openTopicAgent}
-      className={`group flex flex-col items-center text-center focus-visible:outline-none ${compact ? "md:absolute md:right-7 md:top-7" : ""}`}
+      className="group flex flex-col items-center text-center focus-visible:outline-none"
     >
       <span className="grid size-16 place-items-center rounded-lg border-2 border-dashed border-[#477b52] bg-[#f1f8ed]/90 text-[#2c673d] transition group-hover:-translate-y-1 group-hover:bg-white group-focus-visible:outline-3 group-focus-visible:outline-offset-4 group-focus-visible:outline-[#265f3b] motion-reduce:transform-none">
         <Plus size={30} aria-hidden="true" />

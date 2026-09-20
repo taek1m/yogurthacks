@@ -1,9 +1,10 @@
 "use client";
 
-import { CalendarPlus, CircleAlert, CircleCheck, DollarSign, FileText, PanelRightClose, TriangleAlert, X } from "lucide-react";
+import { CalendarPlus, CircleAlert, CircleCheck, DollarSign, FileText, Highlighter, PanelRightClose, RotateCcw, Trash2, TriangleAlert, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { HighlightMark, HighlightedDocument } from "@/lib/document-highlights";
+import type { FindingSeverity, HighlightKind, HighlightOverride } from "@/types/agent";
 
 type Tone = "red_flag" | "concern" | "deadline" | "financial" | "favorable";
 
@@ -47,6 +48,15 @@ const TONES: Record<Tone, { label: string; icon: LucideIcon; mark: string; chip:
 
 const TONE_ORDER: Tone[] = ["red_flag", "concern", "deadline", "financial", "favorable"];
 
+/** Picking a colour is picking a category; these are the two sides of it. */
+const TONE_MEANS: Record<Tone, { kind: HighlightKind; severity: FindingSeverity }> = {
+  red_flag: { kind: "concern", severity: "red_flag" },
+  concern: { kind: "concern", severity: "important" },
+  deadline: { kind: "deadline", severity: "important" },
+  financial: { kind: "financial", severity: "important" },
+  favorable: { kind: "favorable", severity: "info" },
+};
+
 export function toneOf(mark: HighlightMark): Tone {
   if (mark.kind === "concern") return mark.severity === "red_flag" ? "red_flag" : "concern";
   return mark.kind;
@@ -74,28 +84,77 @@ function downloadReminder(mark: HighlightMark) {
 }
 
 export function DocumentHighlights({
+  agentId,
   document: highlighted,
   documentName,
   documentNames,
+  overrides,
   onHide,
 }: {
+  agentId: string;
   document: HighlightedDocument;
   documentName: string;
   documentNames?: string[];
+  overrides?: Record<string, HighlightOverride>;
   onHide?: () => void;
 }) {
   const [active, setActive] = useState<Tone[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
+  // One place applies reader edits: saved ones seed the state, new ones land
+  // here first and are saved in the background.
+  const [edits, setEdits] = useState<Record<string, HighlightOverride>>(() => overrides ?? {});
+  const [saveError, setSaveError] = useState("");
+
+  const editOf = (mark: HighlightMark): HighlightOverride | undefined => edits[mark.key];
+  const shownMark = (mark: HighlightMark): HighlightMark | null => {
+    const edit = editOf(mark);
+    if (edit?.removed) return null;
+    if (!edit) return mark;
+    return { ...mark, kind: edit.kind ?? mark.kind, severity: edit.severity ?? mark.severity };
+  };
+
+  async function save(key: string, override: HighlightOverride | null) {
+    const previous = edits[key];
+    setEdits((current) => {
+      const next = { ...current };
+      if (override) next[key] = override;
+      else delete next[key];
+      return next;
+    });
+    setSaveError("");
+    try {
+      const response = await fetch(`/api/agents/${agentId}/highlights`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(override ? { key, ...override } : { key, reset: true }),
+      });
+      if (!response.ok) throw new Error("save failed");
+    } catch {
+      setEdits((current) => {
+        const next = { ...current };
+        if (previous) next[key] = previous;
+        else delete next[key];
+        return next;
+      });
+      setSaveError("That change was not saved. Try again.");
+    }
+  }
 
   const toneCounts = useMemo(() => {
     const counts: Record<Tone, number> = { red_flag: 0, concern: 0, deadline: 0, financial: 0, favorable: 0 };
-    for (const mark of highlighted.marks) counts[toneOf(mark)] += 1;
+    for (const mark of highlighted.marks) {
+      const edit = edits[mark.key];
+      if (edit?.removed) continue;
+      counts[toneOf({ ...mark, kind: edit?.kind ?? mark.kind, severity: edit?.severity ?? mark.severity })] += 1;
+    }
     return counts;
-  }, [highlighted.marks]);
+  }, [highlighted.marks, edits]);
 
-  const selectedMark = highlighted.marks.find((mark) => mark.findingId === selected) ?? null;
+  const rawSelected = highlighted.marks.find((mark) => mark.findingId === selected) ?? null;
+  const selectedMark = rawSelected ? shownMark(rawSelected) : null;
   const shown = (tone: Tone) => active.length === 0 || active.includes(tone);
-  const total = highlighted.marks.length;
+  const removedMarks = highlighted.marks.filter((mark) => edits[mark.key]?.removed);
+  const total = TONE_ORDER.reduce((sum, tone) => sum + toneCounts[tone], 0);
   const files = documentNames?.length ? documentNames : [documentName];
   // Page numbers run on across documents, so each card says which file it is from.
   const showSources = files.length > 1;
@@ -107,7 +166,7 @@ export function DocumentHighlights({
   }
 
   return (
-    <aside className="flex min-w-0 flex-col bg-[#f3f7ef]" aria-label={`Highlighted text of ${documentName}`}>
+    <aside className="flex min-w-0 flex-col bg-[#f3f7ef] lg:h-[calc(100vh-4rem)]" aria-label={`Highlighted text of ${documentName}`}>
       <div className="border-b border-[#d4dfd1] px-5 py-5 sm:px-7">
         <div className="flex items-start justify-between gap-3">
           <p className="text-xs font-bold uppercase text-[#4c765a]">Marked-up document</p>
@@ -193,6 +252,51 @@ export function DocumentHighlights({
                   Set reminder
                 </button>
               )}
+
+              {/* 기계가 고른 분류를 읽는 사람이 바로잡는 자리 */}
+              <div className="mt-3 border-t border-[#e2e9de] pt-2.5">
+                <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase text-[#708477]">
+                  <Highlighter size={12} />
+                  Change the colour
+                </p>
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                  {TONE_ORDER.map((tone) => {
+                    const current = toneOf(selectedMark) === tone;
+                    return (
+                      <button
+                        key={tone}
+                        type="button"
+                        title={TONES[tone].label}
+                        aria-label={`Mark as ${TONES[tone].label}`}
+                        aria-pressed={current}
+                        onClick={() => void save(rawSelected!.key, TONE_MEANS[tone])}
+                        className={`size-6 rounded-full border transition ${TONES[tone].dot} ${
+                          current ? "scale-110 border-[#1e432d] ring-2 ring-[#c4dfc9]" : "border-black/20 hover:scale-105"
+                        }`}
+                      />
+                    );
+                  })}
+                  <button
+                    type="button"
+                    onClick={() => void save(rawSelected!.key, { removed: true })}
+                    className="ml-1 inline-flex items-center gap-1.5 rounded-md border border-[#e0a79d] bg-white px-2.5 py-1.5 text-xs font-bold text-[#8f2f23] hover:bg-[#fff0ed]"
+                  >
+                    <Trash2 size={13} />
+                    Remove
+                  </button>
+                  {edits[rawSelected!.key] && (
+                    <button
+                      type="button"
+                      onClick={() => void save(rawSelected!.key, null)}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-[#c6d4c3] bg-white px-2.5 py-1.5 text-xs font-bold text-[#3c5a47] hover:bg-[#eef6ec]"
+                    >
+                      <RotateCcw size={13} />
+                      Reset
+                    </button>
+                  )}
+                </div>
+                {saveError && <p role="alert" className="mt-1.5 text-xs text-[#a43b32]">{saveError}</p>}
+              </div>
             </div>
             <button
               type="button"
@@ -206,7 +310,7 @@ export function DocumentHighlights({
         </div>
       )}
 
-      <div className="flex-1 space-y-4 overflow-y-auto px-5 py-5 sm:px-7">
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5 sm:px-7">
         {highlighted.pages.map((page) => (
           <article key={page.page} className="rounded-lg border border-[#dce5d9] bg-[#fffef9] p-4 shadow-sm">
             <p className="mb-2 flex items-baseline gap-1.5 text-[11px] font-bold uppercase tracking-wide text-[#7b897f]">
@@ -215,7 +319,7 @@ export function DocumentHighlights({
             </p>
             <p className="whitespace-pre-wrap text-[13px] leading-6 text-[#31473a]">
               {page.segments.map((segment, index) => {
-                const mark = segment.mark;
+                const mark = segment.mark ? shownMark(segment.mark) : null;
                 if (!mark) return <span key={index}>{segment.text}</span>;
                 const tone = toneOf(mark);
                 const dimmed = !shown(tone);
@@ -243,6 +347,27 @@ export function DocumentHighlights({
             </p>
           </article>
         ))}
+        {removedMarks.length > 0 && (
+          <div className="rounded-lg border border-dashed border-[#cfd9cb] bg-[#fbfcf9] p-3">
+            <p className="text-[11px] font-bold uppercase text-[#708477]">Removed by you ({removedMarks.length})</p>
+            <ul className="mt-2 space-y-1.5">
+              {removedMarks.map((mark) => (
+                <li key={mark.key} className="flex items-start gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void save(mark.key, null)}
+                    title="Put this highlight back"
+                    aria-label={`Put back: ${mark.title}`}
+                    className="mt-0.5 grid size-6 shrink-0 place-items-center rounded border border-[#c6d4c3] bg-white text-[#3c5a47] hover:bg-[#eef6ec]"
+                  >
+                    <RotateCcw size={12} />
+                  </button>
+                  <span className="min-w-0 text-xs leading-5 text-[#687a6e]">{mark.title}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         {highlighted.unmatched > 0 && (
           <p className="px-1 pb-2 text-xs leading-5 text-[#7b897f]">
             {highlighted.unmatched} finding{highlighted.unmatched === 1 ? "" : "s"} could not be traced back to an exact

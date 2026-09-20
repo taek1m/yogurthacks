@@ -8,6 +8,8 @@ import type {
 
 export interface HighlightMark {
   findingId: string;
+  /** Stable across re-analysis, unlike findingId, so reader edits survive. */
+  key: string;
   kind: HighlightKind;
   severity: FindingSeverity;
   title: string;
@@ -80,6 +82,14 @@ function normalizeQuote(quote: string): string {
   return quote.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
+/**
+ * Identifies a highlight by what it quotes rather than by a generated id, so a
+ * reader's edit still applies after the document is analysed again.
+ */
+export function highlightKey(quote: string): string {
+  return normalizeQuote(quote).slice(0, 120);
+}
+
 /** Locates a quote inside a page, falling back to a prefix when the tail was truncated. */
 function locate(
   normalized: { value: string; map: number[] },
@@ -114,6 +124,7 @@ export function buildHighlightedDocument(
     for (const finding of byKind[kind]) {
       const mark: HighlightMark = {
         findingId: finding.id,
+        key: highlightKey(finding.quote),
         kind,
         severity: finding.severity ?? "important",
         title: finding.title,
