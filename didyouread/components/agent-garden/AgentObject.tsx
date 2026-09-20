@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, MoreHorizontal, Pause, Pencil, Trash2, X } from "lucide-react";
+import { Check, MoreHorizontal, Pencil, Trash2, X } from "lucide-react";
 import Link from "next/link";
 import type { CSSProperties, PointerEvent as ReactPointerEvent, RefObject } from "react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -20,6 +20,9 @@ const DOUBLE_CLICK_MS = 240;
 const BOUNDS = { minX: 8, maxX: 92, minY: 16, maxY: 86 };
 const STROLL_SPEED = 2.6; // percent per second
 const MARCH_SPEED = 17; // percent per second, walking to the cannon
+// Where a spotlighted agent flies to: clear of the hills, up in the sky band.
+const SKY_Y_PERCENT = 16;
+const FLIGHT_MS = 1100;
 const LOAD_MS = 420; // climbing into the muzzle
 const FIRE_MS = 760; // in flight, before the delete request
 
@@ -32,6 +35,7 @@ function clamp(value: number, min: number, max: number) {
 export function AgentObject({
   agent,
   index,
+  spotlight = false,
   gardenRef,
   cannonRef,
   onCannonArm,
@@ -42,6 +46,7 @@ export function AgentObject({
 }: {
   agent: DocumentAgent;
   index: number;
+  spotlight?: boolean;
   gardenRef: RefObject<HTMLDivElement | null>;
   cannonRef: RefObject<HTMLDivElement | null>;
   onCannonArm: (armed: boolean) => void;
@@ -64,10 +69,15 @@ export function AgentObject({
   const [launch, setLaunch] = useState<LaunchPhase | null>(null);
 
   const wrap = useRef<HTMLDivElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  const menuButton = useRef<HTMLButtonElement>(null);
   const position = useRef({ ...home });
   const steppingRef = useRef(false);
   const facingRef = useRef(1);
   const target = useRef<GardenPosition | null>(null);
+  const perch = useRef<GardenPosition | null>(null);
+  // While gliding home the stroll loop must keep its hands off the position.
+  const landingUntil = useRef(0);
   const restUntil = useRef(0);
   const suppressClick = useRef(false);
   const clickTimer = useRef<number | undefined>(undefined);
@@ -137,7 +147,7 @@ export function AgentObject({
 
   // Idle strolling. Runs only on the layout where agents are absolutely positioned.
   useEffect(() => {
-    if (!walking || launching || dragging || pressing) return;
+    if (!walking || launching || dragging || pressing || spotlight) return;
     if (!window.matchMedia("(min-width: 768px)").matches) return;
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
 
@@ -146,6 +156,11 @@ export function AgentObject({
     const tick = (now: number) => {
       const delta = Math.min(64, now - last) / 1000;
       last = now;
+
+      if (now < landingUntil.current) {
+        frame = requestAnimationFrame(tick);
+        return;
+      }
 
       if (!target.current && now >= restUntil.current) {
         target.current = {
@@ -179,7 +194,7 @@ export function AgentObject({
 
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [walking, launching, dragging, pressing, paint, faceTowards, setSteps]);
+  }, [walking, launching, dragging, pressing, spotlight, paint, faceTowards, setSteps]);
 
   // Launch step 1: cry, then walk into the cannon under its own power.
   useEffect(() => {
@@ -250,10 +265,57 @@ export function AgentObject({
     };
   }, [launch, agent.id, onRemove]);
 
+  // Easing left/top is a DOM concern, so it is set directly rather than through
+  // state, which would re-render the whole object mid-flight.
+  const glide = useCallback((on: boolean) => {
+    const element = wrap.current;
+    if (!element) return;
+    element.style.transitionProperty = on ? "left, top" : "";
+    element.style.transitionDuration = on ? `${FLIGHT_MS}ms` : "";
+    element.style.transitionTimingFunction = on ? "ease-in-out" : "";
+  }, []);
+
+  useEffect(() => {
+    if (spotlight) {
+      perch.current = { ...position.current };
+      glide(true);
+      position.current = { xPercent: position.current.xPercent, yPercent: SKY_Y_PERCENT };
+      paint();
+      return;
+    }
+    const home = perch.current;
+    if (!home) return;
+    perch.current = null;
+    landingUntil.current = performance.now() + FLIGHT_MS;
+    position.current = home;
+    paint();
+    const timer = window.setTimeout(() => glide(false), FLIGHT_MS);
+    return () => window.clearTimeout(timer);
+  }, [spotlight, paint, glide]);
+
   useEffect(() => () => window.clearTimeout(clickTimer.current), []);
 
+  // Clicking anywhere else, or pressing Escape, dismisses the edit/remove menu.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const dismiss = (event: Event) => {
+      if (!(event.target instanceof Node)) return;
+      if (menu.current?.contains(event.target) || menuButton.current?.contains(event.target)) return;
+      setMenuOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", dismiss);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen]);
+
   function beginDrag(event: ReactPointerEvent<HTMLAnchorElement>) {
-    if (launching) return;
+    if (launching || spotlight) return;
     if (!window.matchMedia("(min-width: 768px)").matches || event.button !== 0) return;
     const target = event.currentTarget;
     drag.current = {
@@ -431,7 +493,9 @@ export function AgentObject({
   return (
     <div
       ref={wrap}
-      className="relative flex min-w-0 flex-col items-center md:absolute md:left-[var(--agent-x)] md:top-[var(--agent-y)] md:w-52 md:-translate-x-1/2 md:-translate-y-1/2"
+      className={`relative flex min-w-0 flex-col items-center md:absolute md:left-[var(--agent-x)] md:top-[var(--agent-y)] md:w-52 md:-translate-x-1/2 md:-translate-y-1/2 ${
+        spotlight ? "z-20" : ""
+      }`}
       style={style}
     >
       <div
@@ -453,20 +517,32 @@ export function AgentObject({
           className={`group flex w-full min-w-0 select-none flex-col items-center text-center focus-visible:outline-none md:touch-none ${dragging ? "cursor-grabbing" : "cursor-pointer"}`}
         >
           <div className="relative flex flex-col items-center">
+            {spotlight && (
+              <>
+                {/* 위에서 내려오는 빛기둥 */}
+                <span
+                  aria-hidden="true"
+                  className="pointer-events-none absolute bottom-1 left-1/2 z-0 h-[460px] w-48 -translate-x-1/2 bg-gradient-to-b from-[#fff9d4]/35 via-[#ffeb8f]/75 to-[#ffdd57]/90 [animation:spotlightIn_0.5s_ease-out] [clip-path:polygon(40%_0,60%_0,100%_100%,0_100%)]"
+                />
+                {/* 발밑에 고이는 빛 */}
+                <span
+                  aria-hidden="true"
+                  className="pointer-events-none absolute -bottom-1 left-1/2 z-0 h-6 w-40 -translate-x-1/2 rounded-[50%] bg-[#ffeea0] blur-md [animation:spotlightGlow_1.8s_ease-in-out_infinite]"
+                />
+              </>
+            )}
             {/* Wii Mii 캐릭터 (누르는 중이거나 드래그 중일 때 허우적거림 활성화) */}
-            <div style={{ transform: facing < 0 ? "scaleX(-1)" : undefined }}>
+            <div className="relative z-10" style={{ transform: facing < 0 ? "scaleX(-1)" : undefined }}>
               <MiiCharacter
                 isHeld={pressing || dragging}
                 isWalking={legsMoving}
                 isCrying={launching}
+                isResting={!walking && !launching && !spotlight}
+                hasWings={spotlight}
+                flipped={facing < 0}
                 docType={agent.documentType}
               />
             </div>
-            {!walking && !launching && (
-              <span className="absolute -right-1 -top-1 grid size-6 place-items-center rounded-full bg-[#fffef9] text-[#4a6a55] shadow ring-1 ring-[#c7d5c3]">
-                <Pause size={12} fill="currentColor" />
-              </span>
-            )}
           </div>
           <span className="mt-3 w-full rounded-md bg-[#fffef9]/95 px-2 py-1.5 shadow-sm ring-1 ring-[#d6e1d2]">
             <span className="block truncate text-sm font-bold text-[#193a28]">{agent.name}</span>
@@ -475,11 +551,11 @@ export function AgentObject({
           </span>
         </Link>
 
-        <button type="button" aria-label={`Manage ${agent.name}`} aria-expanded={menuOpen} onClick={() => setMenuOpen((value) => !value)} className="absolute right-0 top-0 grid size-8 place-items-center rounded-full border border-[#c7d5c3] bg-white text-[#345942] shadow hover:bg-[#eef5eb] md:-right-1 md:-top-1">
+        <button ref={menuButton} type="button" aria-label={`Manage ${agent.name}`} aria-expanded={menuOpen} onClick={() => setMenuOpen((value) => !value)} className="absolute right-0 top-0 grid size-8 place-items-center rounded-full border border-[#c7d5c3] bg-white text-[#345942] shadow hover:bg-[#eef5eb] md:-right-1 md:-top-1">
           <MoreHorizontal size={17} />
         </button>
         {menuOpen && (
-          <div className="absolute right-0 top-9 z-20 w-36 rounded-md border border-[#d4dfd1] bg-white p-1.5 text-left shadow-xl">
+          <div ref={menu} className="absolute right-0 top-9 z-20 w-36 rounded-md border border-[#d4dfd1] bg-white p-1.5 text-left shadow-xl">
             <button type="button" onClick={() => { setMode("edit"); setMenuOpen(false); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-sm font-semibold hover:bg-[#eef6ec]"><Pencil size={15} />Edit</button>
             <button type="button" onClick={() => { setMode("remove"); setMenuOpen(false); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-sm font-semibold text-[#a43b32] hover:bg-[#fff0ed]"><Trash2 size={15} />Remove</button>
           </div>
