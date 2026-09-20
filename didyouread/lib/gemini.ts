@@ -102,7 +102,7 @@ async function callGemini(
       ?.map((part) => part.text || "")
       .join("")
       .trim();
-    if (!text) throw new Error("Gemini returned an empty response");
+    if (!text) throw new Error("The model returned an empty response");
     return text;
   } finally {
     clearTimeout(timeout);
@@ -398,7 +398,7 @@ export function geminiErrorResponse(error: unknown): Response | null {
   if (!(error instanceof Error)) return null;
   if (error.message === "GEMINI_NOT_CONFIGURED") {
     return Response.json(
-      { error: "Gemini is not configured. Add GEMINI_API_KEY to the server environment." },
+      { error: "The agent is not set up yet. Add GEMINI_API_KEY to the server environment." },
       { status: 503 },
     );
   }
@@ -406,7 +406,7 @@ export function geminiErrorResponse(error: unknown): Response | null {
     return Response.json(
       {
         error:
-          "Gemini rejected the API key. Create one at aistudio.google.com/apikey (it starts with AIza) and set GEMINI_API_KEY. Tokens that start with AQ. expire after a few hours.",
+          "The agent's API key was rejected. Create one at aistudio.google.com/apikey (it starts with AIza) and set GEMINI_API_KEY. Tokens that start with AQ. expire after a few hours.",
       },
       { status: 401 },
     );
@@ -415,13 +415,13 @@ export function geminiErrorResponse(error: unknown): Response | null {
     return Response.json(
       {
         error:
-          "Every Gemini model has hit its free daily request limit. Try again tomorrow, or add billing to the API key.",
+          "The agents have hit their free daily request limit. Try again tomorrow, or add billing to the API key.",
       },
       { status: 429 },
     );
   }
   if (error.message === "GEMINI_UNAVAILABLE") {
-    return Response.json({ error: "Gemini could not create a response. Please try again." }, { status: 502 });
+    return Response.json({ error: "The agent could not write a reply. Please try again." }, { status: 502 });
   }
   return null;
 }

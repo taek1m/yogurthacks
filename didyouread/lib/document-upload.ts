@@ -45,7 +45,7 @@ async function readPhotoUpload(files: File[]): Promise<ReadDocument> {
     if (file.size > MAX_PHOTO_BYTES) throw new PdfError("Photos must be 8 MB or smaller", 413);
   }
   if (!process.env.GEMINI_API_KEY) {
-    throw new PdfError("Reading a photo needs Gemini. Add GEMINI_API_KEY, or upload a PDF.", 503);
+    throw new PdfError("Reading a photo needs the agent. Add GEMINI_API_KEY, or upload a PDF.", 503);
   }
 
   const pages: DocumentPage[] = [];
