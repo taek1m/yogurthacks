@@ -1,20 +1,38 @@
-import { FileText, MessageSquareText } from "lucide-react";
+import { Clock, FileText, MessageSquareText } from "lucide-react";
 import Link from "next/link";
 import type { AgentSearchResult } from "@/types/agent";
 
 export function SearchResults({
   results,
+  recent = [],
   state,
   onPickAgent,
 }: {
   results: AgentSearchResult;
-  state: "loading" | "ready" | "error";
+  /** The agents last opened, offered before anything has been typed. */
+  recent?: AgentSearchResult["agents"];
+  state: "loading" | "ready" | "recent" | "error";
   /** Agents are shown in the garden rather than opened, so picking one is a button. */
   onPickAgent: (agentId: string) => void;
 }) {
   const hasResults = results.agents.length > 0 || results.messages.length > 0;
   return (
     <div id="global-search-results" role="region" aria-live="polite" className="absolute left-0 right-0 top-[calc(100%+0.5rem)] z-50 max-h-[70vh] overflow-y-auto rounded-md border border-[#d5e0d1] bg-white p-2 shadow-xl">
+      {state === "recent" && (
+        <section aria-labelledby="recent-results-title">
+          <h2 id="recent-results-title" className="px-3 pb-1 pt-2 text-xs font-bold uppercase text-[#708477]">Recently visited</h2>
+          {recent.length === 0 ? (
+            <p className="px-3 pb-2 pt-1 text-sm text-[#65796b]">No agents opened yet. Start typing to search.</p>
+          ) : (
+            recent.map((agent) => (
+              <button key={agent.agentId} type="button" onClick={() => onPickAgent(agent.agentId)} className="flex w-full items-start gap-3 rounded px-3 py-2 text-left hover:bg-[#eef6ec] focus-visible:outline-2 focus-visible:outline-[#327a4a]">
+                <Clock size={17} className="mt-0.5 shrink-0 text-[#39734c]" />
+                <span className="min-w-0"><span className="block truncate text-sm font-semibold text-[#183126]">{agent.agentName}</span><span className="block truncate text-xs text-[#65796b]">Show in the garden · {agent.documentName}</span></span>
+              </button>
+            ))
+          )}
+        </section>
+      )}
       {state === "loading" && <p className="p-4 text-sm text-[#65796b]">Searching...</p>}
       {state === "error" && <p className="p-4 text-sm text-[#a43b32]">Search is unavailable. Please try again.</p>}
       {state === "ready" && !hasResults && <p className="p-4 text-sm text-[#65796b]">No matching agents or messages.</p>}

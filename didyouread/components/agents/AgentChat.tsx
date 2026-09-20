@@ -1,10 +1,18 @@
 "use client";
 
-import { FileText, LoaderCircle, Paperclip, Send, Sparkles, Upload } from "lucide-react";
+import { Camera, FileText, LoaderCircle, Paperclip, Send, Sparkles, Upload } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { AgentSummary } from "@/components/agents/AgentSummary";
 import { notifyTodosChanged } from "@/components/navigation/HeaderPanels";
+import {
+  MAX_PHOTOS,
+  UNSUPPORTED_UPLOAD_MESSAGE,
+  UPLOAD_ACCEPT,
+  isPdfFile,
+  isPhotoFile,
+  isSupportedUpload,
+} from "@/lib/upload-kinds";
 import type { AgentMessage, DocumentAgent } from "@/types/agent";
 
 export function AgentChat({ agent, highlightedMessage }: { agent: DocumentAgent; highlightedMessage?: string }) {
@@ -20,7 +28,17 @@ export function AgentChat({ agent, highlightedMessage }: { agent: DocumentAgent;
   const dragDepth = useRef(0);
   const input = useRef<HTMLTextAreaElement>(null);
   const filePicker = useRef<HTMLInputElement>(null);
+  const cameraPicker = useRef<HTMLInputElement>(null);
   const router = useRouter();
+
+  // Remember that this chat was opened, so the search bar can offer it back.
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetch(`/api/agents/${agent.id}/visit`, { method: "POST", signal: controller.signal }).catch(
+      () => {},
+    );
+    return () => controller.abort();
+  }, [agent.id]);
 
   useEffect(() => {
     if (highlightedMessage) {
@@ -36,10 +54,6 @@ export function AgentChat({ agent, highlightedMessage }: { agent: DocumentAgent;
     const list = stream.current;
     if (!list) return;
     list.scrollTo({ top: list.scrollHeight, behavior: smooth ? "smooth" : "auto" });
-  }
-
-  function isPdf(file: File) {
-    return file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
   }
 
   function hasFiles(event: React.DragEvent) {
@@ -65,26 +79,39 @@ export function AgentChat({ agent, highlightedMessage }: { agent: DocumentAgent;
     dragDepth.current = 0;
     setDropping(false);
     if (attaching) return;
-    const files = Array.from(event.dataTransfer.files);
-    const pdf = files.find(isPdf);
-    if (!pdf) {
-      setError(files.length ? "Only PDF documents can be added to an agent." : "That drop had no file in it.");
-      return;
-    }
-    if (files.length > 1) setError("Only the first PDF was added.");
-    void attach(pdf);
+    void attach(Array.from(event.dataTransfer.files));
   }
 
-  /** Attaches another PDF so this agent answers from it too. */
-  async function attach(file: File) {
+  /** Keeps one PDF, or a run of photographed pages that become one document. */
+  function pickFiles(picked: File[]): File[] | null {
+    const supported = picked.filter(isSupportedUpload);
+    if (supported.length === 0) {
+      setError(picked.length ? UNSUPPORTED_UPLOAD_MESSAGE : "That drop had no file in it.");
+      return null;
+    }
+    const pdf = supported.find(isPdfFile);
+    if (pdf) {
+      setError(supported.length > 1 ? "A PDF is read on its own, so only that file was added." : "");
+      return [pdf];
+    }
+    const photos = supported.filter(isPhotoFile).slice(0, MAX_PHOTOS);
+    setError(
+      supported.length > photos.length ? `Up to ${MAX_PHOTOS} photos can be read at once.` : "",
+    );
+    return photos;
+  }
+
+  /** Attaches another PDF, or photographed pages, so this agent answers from it too. */
+  async function attach(picked: File[]) {
+    const files = pickFiles(picked);
+    if (!files) return;
     setAttaching(true);
-    setError("");
     const body = new FormData();
-    body.set("document", file);
+    for (const file of files) body.append("document", file);
     try {
       const response = await fetch(`/api/agents/${agent.id}/documents`, { method: "POST", body });
       const result = (await response.json()) as { agent?: DocumentAgent; message?: AgentMessage; error?: string };
-      if (!response.ok || !result.agent || !result.message) throw new Error(result.error || "The PDF could not be added");
+      if (!response.ok || !result.agent || !result.message) throw new Error(result.error || "The document could not be added");
       setMessages((current) => [...current, result.message!]);
       setDocumentNames(result.agent.documentNames ?? [result.agent.documentName]);
       window.dispatchEvent(new Event("agent-garden:changed"));
@@ -92,7 +119,7 @@ export function AgentChat({ agent, highlightedMessage }: { agent: DocumentAgent;
       router.refresh();
       window.setTimeout(() => scrollToLatest(), 50);
     } catch (attachError) {
-      setError(attachError instanceof Error ? attachError.message : "The PDF could not be added");
+      setError(attachError instanceof Error ? attachError.message : "The document could not be added");
     } finally {
       setAttaching(false);
     }
@@ -220,29 +247,52 @@ export function AgentChat({ agent, highlightedMessage }: { agent: DocumentAgent;
           {dropping && (
             <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center gap-2 rounded-lg bg-[#eef6ec] text-sm font-bold text-[#22613c]">
               <Upload size={18} />
-              Drop your PDF here to add it to this agent
+              Drop a PDF or a photo here to add it to this agent
             </div>
           )}
           <input
             ref={filePicker}
             type="file"
-            accept="application/pdf,.pdf"
+            accept={UPLOAD_ACCEPT}
+            multiple
             className="sr-only"
             onChange={(event) => {
-              const file = event.target.files?.[0];
+              const picked = Array.from(event.target.files ?? []);
               event.target.value = "";
-              if (file) void attach(file);
+              if (picked.length) void attach(picked);
+            }}
+          />
+          <input
+            ref={cameraPicker}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="sr-only"
+            onChange={(event) => {
+              const picked = Array.from(event.target.files ?? []);
+              event.target.value = "";
+              if (picked.length) void attach(picked);
             }}
           />
           <button
             type="button"
             onClick={() => filePicker.current?.click()}
             disabled={attaching}
-            title="Attach another PDF to this agent"
-            aria-label="Attach another PDF to this agent"
+            title="Attach a PDF or a photo to this agent"
+            aria-label="Attach a PDF or a photo to this agent"
             className="grid size-10 shrink-0 place-items-center rounded-md border border-[#cad8c7] text-[#2d5640] hover:bg-[#eef6ec] disabled:opacity-40"
           >
             {attaching ? <LoaderCircle size={18} className="animate-spin" /> : <Paperclip size={18} />}
+          </button>
+          <button
+            type="button"
+            onClick={() => cameraPicker.current?.click()}
+            disabled={attaching}
+            title="Photograph a page and add it to this agent"
+            aria-label="Photograph a page and add it to this agent"
+            className="grid size-10 shrink-0 place-items-center rounded-md border border-[#cad8c7] text-[#2d5640] hover:bg-[#eef6ec] disabled:opacity-40"
+          >
+            <Camera size={18} />
           </button>
           <textarea id="agent-question" ref={input} value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={onComposerKeyDown} rows={2} placeholder={agent.sourceKind === "topic" ? `Ask about ${agent.topic || "this topic"}...` : "Ask about a deadline, fee, or clause..."}
             aria-describedby="composer-hint" className="max-h-32 min-h-12 flex-1 resize-none bg-transparent px-2 py-1 text-sm outline-none" />

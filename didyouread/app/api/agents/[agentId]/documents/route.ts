@@ -1,12 +1,14 @@
 import { analyzePages } from "@/lib/agent-utils";
 import { addAgentDocument, getStoredAgent } from "@/lib/agent-repository";
 import { authErrorResponse, requireUserId } from "@/lib/auth";
-import { pdfErrorResponse, readPdfUpload } from "@/lib/pdf";
+import { geminiErrorResponse } from "@/lib/gemini";
+import { readDocumentUpload } from "@/lib/document-upload";
+import { pdfErrorResponse } from "@/lib/pdf";
 import type { AgentMessage, DocumentPage } from "@/types/agent";
 
 export const runtime = "nodejs";
 
-/** Adds another PDF to an agent that already exists. */
+/** Adds another PDF, or a photographed page, to an agent that already exists. */
 export async function POST(request: Request, { params }: { params: Promise<{ agentId: string }> }) {
   try {
     const ownerId = await requireUserId();
@@ -14,8 +16,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ age
     const agent = await getStoredAgent(ownerId, agentId);
     if (!agent) return Response.json({ error: "Agent not found" }, { status: 404 });
 
-    const { file, pages } = await readPdfUpload(await request.formData());
-    const documentName = file.name.slice(0, 180);
+    const { pages, documentName } = await readDocumentUpload(await request.formData());
     // A topic agent holds no real document, only a placeholder page. Its first
     // PDF turns it into a document agent so the marked-up view can appear.
     const wasTopic = agent.sourceKind === "topic";
@@ -69,9 +70,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ age
     if (!updated) return Response.json({ error: "Agent not found" }, { status: 404 });
     return Response.json({ agent: updated, message }, { status: 201 });
   } catch (error) {
-    const handled = authErrorResponse(error) ?? pdfErrorResponse(error);
+    const handled = authErrorResponse(error) ?? pdfErrorResponse(error) ?? geminiErrorResponse(error);
     if (handled) return handled;
     console.error("Adding a document failed", error);
-    return Response.json({ error: "The PDF could not be analyzed" }, { status: 500 });
+    return Response.json({ error: "The document could not be analyzed" }, { status: 500 });
   }
 }

@@ -99,6 +99,8 @@ export interface DocumentAgent {
   documentNames?: string[];
   /** Reader edits to the highlights, keyed by the quoted sentence. */
   highlightOverrides?: Record<string, HighlightOverride>;
+  /** Pages the reader deleted from the marked-up view. Undoable from History. */
+  hiddenPages?: number[];
   sourceKind?: "pdf" | "topic";
   topic?: string;
   documentType: DocumentType;
@@ -111,6 +113,8 @@ export interface DocumentAgent {
   messages: AgentMessage[];
   createdAt: string;
   updatedAt: string;
+  /** When its chat was last opened, for the "recently visited" shortlist. */
+  lastOpenedAt?: string;
 }
 
 export interface StoredDocumentAgent extends DocumentAgent {

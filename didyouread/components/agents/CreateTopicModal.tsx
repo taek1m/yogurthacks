@@ -1,8 +1,16 @@
 "use client";
 
-import { FileText, LoaderCircle, Sparkles, Upload, X } from "lucide-react";
+import { Camera, FileText, ImageIcon, LoaderCircle, Sparkles, Upload, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import {
+  MAX_PHOTOS,
+  UNSUPPORTED_UPLOAD_MESSAGE,
+  UPLOAD_ACCEPT,
+  isPdfFile,
+  isPhotoFile,
+  isSupportedUpload,
+} from "@/lib/upload-kinds";
 
 const eventName = "agent-garden:create-topic-agent";
 
@@ -13,7 +21,8 @@ export function openTopicAgent() {
 export function CreateTopicModal() {
   const [open, setOpen] = useState(false);
   const [topic, setTopic] = useState("");
-  const [file, setFile] = useState<File | null>(null);
+  // A PDF arrives on its own; photographed pages arrive as a set.
+  const [files, setFiles] = useState<File[]>([]);
   const [dropping, setDropping] = useState(false);
   // dragenter/dragleave also fire for children, so count them instead of toggling.
   const dragDepth = useRef(0);
@@ -21,6 +30,7 @@ export function CreateTopicModal() {
   const [creating, setCreating] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null);
   const input = useRef<HTMLInputElement>(null);
+  const camera = useRef<HTMLInputElement>(null);
   const router = useRouter();
 
   useEffect(() => {
@@ -37,12 +47,43 @@ export function CreateTopicModal() {
     if (!open && dialog.current?.open) dialog.current.close();
   }, [open]);
 
-  function isPdf(candidate: File) {
-    return candidate.type === "application/pdf" || candidate.name.toLowerCase().endsWith(".pdf");
-  }
-
   function hasFiles(event: React.DragEvent) {
     return Array.from(event.dataTransfer.types).includes("Files");
+  }
+
+  /**
+   * Keeps one PDF, or a set of photos. Mixing the two would have to be split
+   * into two agents, so the newest pick simply replaces the other kind.
+   */
+  function accept(picked: File[]) {
+    const supported = picked.filter(isSupportedUpload);
+    if (supported.length === 0) {
+      setError(picked.length ? UNSUPPORTED_UPLOAD_MESSAGE : "That drop had no file in it.");
+      return;
+    }
+    const pdf = supported.find(isPdfFile);
+    if (pdf) {
+      setFiles([pdf]);
+      setError(supported.length > 1 ? "A PDF is read on its own, so only that file was kept." : "");
+      return;
+    }
+    const photos = supported.filter(isPhotoFile);
+    setFiles((current) => {
+      const kept = current.every(isPhotoFile) ? current : [];
+      // The same photo picked twice would become two identical pages.
+      const fresh = photos.filter(
+        (photo) => !kept.some((held) => held.name === photo.name && held.size === photo.size),
+      );
+      const merged = [...kept, ...fresh].slice(0, MAX_PHOTOS);
+      setError(
+        kept.length + fresh.length > MAX_PHOTOS
+          ? `Up to ${MAX_PHOTOS} photos can be read at once.`
+          : supported.length > photos.length
+            ? UNSUPPORTED_UPLOAD_MESSAGE
+            : "",
+      );
+      return merged;
+    });
   }
 
   function onDragEnter(event: React.DragEvent) {
@@ -64,49 +105,46 @@ export function CreateTopicModal() {
     dragDepth.current = 0;
     setDropping(false);
     if (creating) return;
-    const files = Array.from(event.dataTransfer.files);
-    const pdf = files.find(isPdf);
-    if (!pdf) {
-      setError(files.length ? "Only PDF documents can be turned into an agent." : "That drop had no file in it.");
-      return;
-    }
-    setError(files.length > 1 ? "Only the first PDF was used." : "");
-    setFile(pdf);
+    accept(Array.from(event.dataTransfer.files));
   }
 
   function close() {
     if (creating) return;
     setOpen(false);
     setError("");
-    setFile(null);
+    setFiles([]);
     setDropping(false);
     dragDepth.current = 0;
   }
 
-  /** Uploading a PDF creates a document agent; Gemini names it from the file. */
-  async function createFromPdf(pdf: File) {
+  /** Uploading a document creates a document agent; Gemini names it from the text. */
+  async function createFromUpload(picked: File[]) {
     const body = new FormData();
-    body.set("document", pdf);
+    for (const picked_file of picked) body.append("document", picked_file);
     const response = await fetch("/api/agents", { method: "POST", body });
     const result = (await response.json()) as { agent?: { id: string }; error?: string };
-    if (!response.ok || !result.agent) throw new Error(result.error || "The PDF could not be analyzed");
+    if (!response.ok || !result.agent) throw new Error(result.error || "The document could not be analyzed");
     return result.agent.id;
   }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     const value = topic.trim();
-    if (!file && value.length < 3) {
-      return setError("Upload a PDF, or enter a topic with at least 3 characters.");
+    if (files.length === 0 && value.length < 3) {
+      return setError("Upload a PDF or a photo, or enter a topic with at least 3 characters.");
     }
-    if (file && file.size > 5 * 1024 * 1024) return setError("PDFs must be 5 MB or smaller.");
+    const pdf = files.find(isPdfFile);
+    if (pdf && pdf.size > 5 * 1024 * 1024) return setError("PDFs must be 5 MB or smaller.");
+    if (files.some((picked) => isPhotoFile(picked) && picked.size > 8 * 1024 * 1024)) {
+      return setError("Photos must be 8 MB or smaller.");
+    }
 
     setCreating(true);
     setError("");
     try {
       let agentId: string;
-      if (file) {
-        agentId = await createFromPdf(file);
+      if (files.length > 0) {
+        agentId = await createFromUpload(files);
       } else {
         const response = await fetch("/api/agents/topic", {
           method: "POST",
@@ -119,7 +157,7 @@ export function CreateTopicModal() {
       }
       setOpen(false);
       setTopic("");
-      setFile(null);
+      setFiles([]);
       window.dispatchEvent(new Event("agent-garden:changed"));
       router.push(`/agents/${agentId}`);
       router.refresh();
@@ -129,6 +167,8 @@ export function CreateTopicModal() {
       setCreating(false);
     }
   }
+
+  const photosPicked = files.length > 0 && files.every(isPhotoFile);
 
   return (
     <dialog
@@ -161,25 +201,71 @@ export function CreateTopicModal() {
               : "border-[#9fbea5] bg-[#f2f8ef] hover:border-[#4d865e] hover:bg-[#ebf5e8]"
           }`}
         >
-          {file ? <FileText size={26} className="mb-2 text-[#2d7246]" /> : <Upload size={26} className="mb-2 text-[#2d7246]" />}
+          {files.length === 0 ? (
+            <Upload size={26} className="mb-2 text-[#2d7246]" />
+          ) : photosPicked ? (
+            <ImageIcon size={26} className="mb-2 text-[#2d7246]" />
+          ) : (
+            <FileText size={26} className="mb-2 text-[#2d7246]" />
+          )}
           <span className="max-w-full truncate text-sm font-semibold">
-            {dropping ? "Drop your PDF here" : file?.name || "Upload a PDF, or drop one in"}
+            {dropping
+              ? "Drop it here"
+              : files.length === 0
+                ? "Upload a PDF or a photo, or drop one in"
+                : photosPicked
+                  ? `${files.length} photo${files.length === 1 ? "" : "s"} ready`
+                  : files[0].name}
           </span>
-          <span className="mt-1 text-xs text-[#667b6d]">Gemini reads the title and contents to name the agent</span>
+          <span className="mt-1 text-xs text-[#667b6d]">
+            Gemini reads the contents to name the agent. Photos of paper are read too.
+          </span>
           <input
             type="file"
-            accept="application/pdf,.pdf"
+            accept={UPLOAD_ACCEPT}
+            multiple
             className="sr-only"
             onChange={(event) => {
-              setFile(event.target.files?.[0] ?? null);
-              setError("");
+              accept(Array.from(event.target.files ?? []));
+              // Let the same file be picked again after it is removed.
+              event.target.value = "";
             }}
           />
         </label>
-        {file && (
-          <button type="button" onClick={() => setFile(null)} className="mt-2 text-xs font-semibold text-[#8f2f23] hover:underline">
-            Remove {file.name}
-          </button>
+
+        <label className="mt-2 flex cursor-pointer items-center justify-center gap-2 rounded-md border border-[#b7cbb5] bg-white px-3 py-2 text-sm font-semibold text-[#225f3b] hover:bg-[#eef6ec]">
+          <Camera size={17} />
+          {photosPicked ? "Take another photo" : "Take a photo of the document"}
+          <input
+            ref={camera}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="sr-only"
+            onChange={(event) => {
+              accept(Array.from(event.target.files ?? []));
+              event.target.value = "";
+            }}
+          />
+        </label>
+
+        {files.length > 0 && (
+          <ul className="mt-2 space-y-1">
+            {files.map((picked, index) => (
+              <li key={`${picked.name}-${picked.size}`} className="flex items-center gap-2 rounded bg-[#f2f8ef] px-2 py-1.5 text-xs">
+                {photosPicked && <span className="font-bold text-[#4b765a]">Page {index + 1}</span>}
+                <span className="min-w-0 flex-1 truncate text-[#33513f]">{picked.name}</span>
+                <button
+                  type="button"
+                  onClick={() => setFiles((current) => current.filter((held) => held !== picked))}
+                  aria-label={`Remove ${picked.name}`}
+                  className="shrink-0 rounded p-0.5 text-[#8f2f23] hover:bg-[#fbe6e2]"
+                >
+                  <X size={14} />
+                </button>
+              </li>
+            ))}
+          </ul>
         )}
 
         <div className="my-5 flex items-center gap-3 text-xs font-bold uppercase text-[#8ba292]">
@@ -193,22 +279,30 @@ export function CreateTopicModal() {
           value={topic}
           onChange={(event) => setTopic(event.target.value)}
           maxLength={160}
-          disabled={Boolean(file)}
+          disabled={files.length > 0}
           placeholder="e.g. Car agreement"
           className="mt-2 h-12 w-full rounded-md border border-[#b7cbb5] bg-white px-3 text-base outline-none focus:border-[#4f865e] focus:ring-2 focus:ring-[#c4dfc9] disabled:bg-[#f2f4f1] disabled:text-[#93a398]"
         />
         <p className="mt-2 text-xs leading-5 text-[#65796b]">
-          {file
-            ? "The uploaded PDF will be used. Remove it to create a topic agent instead."
+          {files.length > 0
+            ? photosPicked
+              ? "The photos will be read, in the order listed. Remove them to create a topic agent instead."
+              : "The uploaded PDF will be used. Remove it to create a topic agent instead."
             : "Gemini will name the agent, choose its garden object, and prepare its first conversation."}
         </p>
         {error && <p role="alert" className="mt-3 rounded-md bg-[#fff0ed] px-3 py-2 text-sm text-[#a43b32]">{error}</p>}
 
         <div className="mt-6 flex justify-end gap-3">
           <button type="button" onClick={close} className="h-10 rounded-md border border-[#cad8c7] px-4 text-sm font-semibold hover:bg-[#f0f4ee]">Cancel</button>
-          <button type="submit" disabled={(!file && topic.trim().length < 3) || creating} className="inline-flex h-10 items-center gap-2 rounded-md bg-[#225f3b] px-4 text-sm font-semibold text-white hover:bg-[#184b2d] disabled:cursor-not-allowed disabled:opacity-50">
+          <button type="submit" disabled={(files.length === 0 && topic.trim().length < 3) || creating} className="inline-flex h-10 items-center gap-2 rounded-md bg-[#225f3b] px-4 text-sm font-semibold text-white hover:bg-[#184b2d] disabled:cursor-not-allowed disabled:opacity-50">
             {creating && <LoaderCircle size={17} className="animate-spin" />}
-            {creating ? (file ? "Reading document..." : "Growing agent...") : "Create agent"}
+            {creating
+              ? photosPicked
+                ? "Reading the photos..."
+                : files.length > 0
+                  ? "Reading document..."
+                  : "Growing agent..."
+              : "Create agent"}
           </button>
         </div>
       </form>

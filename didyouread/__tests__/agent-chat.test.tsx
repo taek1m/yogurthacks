@@ -27,6 +27,17 @@ function composer() {
   return screen.getByLabelText("Ask this agent a question");
 }
 
+/** Opening a chat also records the visit, so every render makes a request. */
+function stubFetch() {
+  const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+function sentQuestions(fetchMock: ReturnType<typeof vi.fn>) {
+  return fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/messages"));
+}
+
 describe("chat composer", () => {
   afterEach(() => vi.unstubAllGlobals());
 
@@ -99,25 +110,23 @@ describe("chat composer", () => {
   });
 
   it("keeps Shift+Enter as a newline instead of sending", () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = stubFetch();
     render(<AgentChat agent={agent} />);
 
     fireEvent.change(composer(), { target: { value: "first line" } });
     fireEvent.keyDown(composer(), { key: "Enter", shiftKey: true });
 
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(sentQuestions(fetchMock)).toHaveLength(0);
     expect(composer()).toHaveValue("first line");
   });
 
   it("does not send while an IME is still composing the text", () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = stubFetch();
     render(<AgentChat agent={agent} />);
 
     fireEvent.change(composer(), { target: { value: "한글" } });
     fireEvent.keyDown(composer(), { key: "Enter", isComposing: true });
 
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(sentQuestions(fetchMock)).toHaveLength(0);
   });
 });

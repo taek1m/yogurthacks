@@ -18,6 +18,7 @@ export function AgentWorkspace({
   documentName,
   documentNames,
   highlightOverrides,
+  hiddenPages,
 }: {
   agentId: string;
   chat: ReactNode;
@@ -25,6 +26,7 @@ export function AgentWorkspace({
   documentName: string;
   documentNames?: string[];
   highlightOverrides?: Record<string, HighlightOverride>;
+  hiddenPages?: number[];
 }) {
   const [open, setOpen] = useState(true);
 
@@ -48,6 +50,7 @@ export function AgentWorkspace({
           documentName={documentName}
           documentNames={documentNames}
           overrides={highlightOverrides}
+          removedPages={hiddenPages}
           onHide={() => setOpen(false)}
         />
       ) : (

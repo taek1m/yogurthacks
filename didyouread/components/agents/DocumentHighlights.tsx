@@ -90,6 +90,7 @@ export function DocumentHighlights({
   documentName,
   documentNames,
   overrides,
+  removedPages,
   onHide,
 }: {
   agentId: string;
@@ -97,6 +98,8 @@ export function DocumentHighlights({
   documentName: string;
   documentNames?: string[];
   overrides?: Record<string, HighlightOverride>;
+  /** Pages the reader deleted on an earlier visit. */
+  removedPages?: number[];
   onHide?: () => void;
 }) {
   const [active, setActive] = useState<Tone[]>([]);
@@ -104,6 +107,7 @@ export function DocumentHighlights({
   // One place applies reader edits: saved ones seed the state, new ones land
   // here first and are saved in the background.
   const [edits, setEdits] = useState<Record<string, HighlightOverride>>(() => overrides ?? {});
+  const [hidden, setHidden] = useState<number[]>(() => removedPages ?? []);
   const [saveError, setSaveError] = useState("");
   const [showHistory, setShowHistory] = useState(false);
   const [reminder, setReminder] = useState<{ text: string; link?: string } | null>(null);
@@ -115,15 +119,39 @@ export function DocumentHighlights({
    */
   /** Throws away every edit and puts the machine's own highlights back. */
   async function restoreAll() {
-    const previous = edits;
+    const previousEdits = edits;
+    const previousHidden = hidden;
     setEdits({});
+    setHidden([]);
     setSaveError("");
     try {
       const response = await fetch(`/api/agents/${agentId}/highlights`, { method: "DELETE" });
       if (!response.ok) throw new Error("restore failed");
     } catch {
-      setEdits(previous);
+      setEdits(previousEdits);
+      setHidden(previousHidden);
       setSaveError("The highlights were not restored. Try again.");
+    }
+  }
+
+  /** Deletes a whole page from the marked-up view, or puts one back. */
+  async function setPageRemoved(page: number, removed: boolean) {
+    const previous = hidden;
+    setHidden((current) =>
+      removed ? [...current, page].sort((a, b) => a - b) : current.filter((value) => value !== page),
+    );
+    setSaveError("");
+    setSelected(null);
+    try {
+      const response = await fetch(`/api/agents/${agentId}/highlights`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ page, hidden: removed }),
+      });
+      if (!response.ok) throw new Error("save failed");
+    } catch {
+      setHidden(previous);
+      setSaveError(removed ? "That page was not deleted. Try again." : "That page was not put back. Try again.");
     }
   }
 
@@ -191,24 +219,45 @@ export function DocumentHighlights({
     }
   }
 
+  const shownPages = useMemo(
+    () => highlighted.pages.filter((page) => !hidden.includes(page.page)),
+    [highlighted.pages, hidden],
+  );
+  /** Highlights still on screen: a deleted page takes its own marks with it. */
+  const liveKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const page of shownPages) {
+      for (const segment of page.segments) if (segment.mark) keys.add(segment.mark.key);
+    }
+    return keys;
+  }, [shownPages]);
+
   const toneCounts = useMemo(() => {
     const counts: Record<Tone, number> = { red_flag: 0, concern: 0, deadline: 0, financial: 0, favorable: 0 };
     for (const mark of highlighted.marks) {
       const edit = edits[mark.key];
-      if (edit?.removed) continue;
+      if (edit?.removed || !liveKeys.has(mark.key)) continue;
       counts[toneOf({ ...mark, kind: edit?.kind ?? mark.kind, severity: edit?.severity ?? mark.severity })] += 1;
     }
     return counts;
-  }, [highlighted.marks, edits]);
+  }, [highlighted.marks, edits, liveKeys]);
 
   const rawSelected = highlighted.marks.find((mark) => mark.findingId === selected) ?? null;
   const selectedMark = rawSelected ? shownMark(rawSelected) : null;
   const shown = (tone: Tone) => active.length === 0 || active.includes(tone);
-  const removedMarks = highlighted.marks.filter((mark) => edits[mark.key]?.removed);
-  /** Every edit, in the order the sentences appear in the document. */
-  const historyEntries = highlighted.marks
+  const removedMarks = highlighted.marks.filter(
+    (mark) => edits[mark.key]?.removed && liveKeys.has(mark.key),
+  );
+  /** Deleted pages first, then highlight edits in the order they are read. */
+  const pageHistory = highlighted.pages
+    .filter((page) => hidden.includes(page.page))
+    .map((page) => page.page);
+  const markHistory = highlighted.marks
     .map((mark) => ({ mark, edit: edits[mark.key] }))
-    .filter((entry): entry is { mark: HighlightMark; edit: HighlightOverride } => Boolean(entry.edit));
+    .filter((entry): entry is { mark: HighlightMark; edit: HighlightOverride } => Boolean(entry.edit))
+    // A highlight on a deleted page is already gone; listing it twice confuses.
+    .filter((entry) => liveKeys.has(entry.mark.key));
+  const changeCount = pageHistory.length + markHistory.length;
   const total = TONE_ORDER.reduce((sum, tone) => sum + toneCounts[tone], 0);
   const files = documentNames?.length ? documentNames : [documentName];
   // Page numbers run on across documents, so each card says which file it is from.
@@ -242,13 +291,13 @@ export function DocumentHighlights({
               onClick={() => { setShowHistory((value) => !value); setSelected(null); }}
               aria-expanded={showHistory}
               aria-label={
-                historyEntries.length > 0
-                  ? `History (${historyEntries.length} ${historyEntries.length === 1 ? "change" : "changes"})`
+                changeCount > 0
+                  ? `History (${changeCount} ${changeCount === 1 ? "change" : "changes"})`
                   : "History"
               }
               title="History"
               className={`inline-flex items-center justify-center p-1 transition ${
-                showHistory || historyEntries.length > 0
+                showHistory || changeCount > 0
                   ? "text-[#245c39]"
                   : "text-[#7d9a86] hover:text-[#2d5640]"
               }`}
@@ -305,15 +354,21 @@ export function DocumentHighlights({
         </div>
       </div>
 
+      {saveError && (
+        <p role="alert" className="border-b border-[#f0d5cf] bg-[#fff0ed] px-5 py-2 text-xs font-semibold text-[#a43b32] sm:px-7">
+          {saveError}
+        </p>
+      )}
+
       {showHistory && (
         <div className="border-b border-[#d4dfd1] bg-[#fffef9] px-5 py-3 sm:px-7">
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-xs font-bold uppercase text-[#4c765a]">Your changes</p>
               <p className="mt-0.5 text-xs leading-5 text-[#687a6e]">
-                {historyEntries.length === 0
-                  ? "You have not changed any highlights yet."
-                  : `${historyEntries.length} highlight${historyEntries.length === 1 ? "" : "s"} changed. Undo them one at a time, or put everything back.`}
+                {changeCount === 0
+                  ? "You have not changed anything yet."
+                  : `${changeCount} change${changeCount === 1 ? "" : "s"}. Undo them one at a time, or put everything back.`}
               </p>
             </div>
             <button
@@ -326,10 +381,29 @@ export function DocumentHighlights({
             </button>
           </div>
 
-          {historyEntries.length > 0 && (
+          {changeCount > 0 && (
             <>
               <ul className="mt-2.5 max-h-56 space-y-1.5 overflow-y-auto pr-1">
-                {historyEntries.map(({ mark, edit }) => {
+                {pageHistory.map((page) => (
+                  <li key={`page-${page}`} className="flex items-start gap-2 rounded-md border border-[#e2e9de] bg-white px-2.5 py-2">
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-xs font-bold text-[#203b2b]">Page {page} deleted</span>
+                      <span className="mt-0.5 block truncate text-xs text-[#687a6e]">
+                        The whole page was taken out of the marked-up view.
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void setPageRemoved(page, false)}
+                      aria-label={`Undo: page ${page} deleted`}
+                      className="inline-flex shrink-0 items-center gap-1 rounded-md border border-[#c6d4c3] bg-white px-2 py-1 text-xs font-bold text-[#2d5640] hover:bg-[#eef6ec]"
+                    >
+                      <Undo2 size={12} />
+                      Undo
+                    </button>
+                  </li>
+                ))}
+                {markHistory.map(({ mark, edit }) => {
                   const was = TONES[toneOf(mark)].label;
                   const now = edit.removed
                     ? null
@@ -365,7 +439,6 @@ export function DocumentHighlights({
               </button>
             </>
           )}
-          {saveError && <p role="alert" className="mt-2 text-xs text-[#a43b32]">{saveError}</p>}
         </div>
       )}
 
@@ -450,7 +523,6 @@ export function DocumentHighlights({
                     </button>
                   )}
                 </div>
-                {saveError && <p role="alert" className="mt-1.5 text-xs text-[#a43b32]">{saveError}</p>}
               </div>
             </div>
             <button
@@ -466,12 +538,23 @@ export function DocumentHighlights({
       )}
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5 sm:px-7">
-        {highlighted.pages.map((page) => (
+        {shownPages.map((page) => (
           <article key={page.page} className="rounded-lg border border-[#dce5d9] bg-[#fffef9] p-4 shadow-sm">
-            <p className="mb-2 flex items-baseline gap-1.5 text-[11px] font-bold uppercase tracking-wide text-[#7b897f]">
-              <span>Page {page.page}</span>
-              {showSources && page.source && <span className="truncate normal-case text-[#9aa79e]">· {page.source}</span>}
-            </p>
+            <div className="mb-2 flex items-start justify-between gap-2">
+              <p className="flex min-w-0 items-baseline gap-1.5 text-[11px] font-bold uppercase tracking-wide text-[#7b897f]">
+                <span>Page {page.page}</span>
+                {showSources && page.source && <span className="truncate normal-case text-[#9aa79e]">· {page.source}</span>}
+              </p>
+              <button
+                type="button"
+                onClick={() => void setPageRemoved(page.page, true)}
+                title={`Delete page ${page.page}`}
+                aria-label={`Delete page ${page.page}`}
+                className="-mr-1 -mt-1 grid size-7 shrink-0 place-items-center rounded text-[#9aa79e] transition hover:bg-[#fbe6e2] hover:text-[#8f2f23]"
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
             <p className="whitespace-pre-wrap text-[13px] leading-6 text-[#31473a]">
               {page.segments.map((segment, index) => {
                 const mark = segment.mark ? shownMark(segment.mark) : null;
@@ -505,6 +588,11 @@ export function DocumentHighlights({
             </p>
           </article>
         ))}
+        {shownPages.length === 0 && (
+          <p className="rounded-lg border border-dashed border-[#cfd9cb] bg-[#fbfcf9] p-4 text-center text-xs leading-6 text-[#687a6e]">
+            Every page has been deleted from this view. Open History to put one back.
+          </p>
+        )}
         {removedMarks.length > 0 && (
           <div className="rounded-lg border border-dashed border-[#cfd9cb] bg-[#fbfcf9] p-3">
             <p className="text-[11px] font-bold uppercase text-[#708477]">Removed by you ({removedMarks.length})</p>

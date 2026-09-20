@@ -34,6 +34,7 @@ export default async function AgentPage({
       documentName={agent.documentName}
       documentNames={agent.documentNames}
       highlightOverrides={agent.highlightOverrides}
+      hiddenPages={agent.hiddenPages}
     />
   );
 }

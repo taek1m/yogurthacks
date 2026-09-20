@@ -22,6 +22,24 @@ describe("SearchResults", () => {
     expect(onPickAgent).toHaveBeenCalledWith("a1");
   });
 
+  it("offers the last agents visited before anything is typed", () => {
+    const recent = [
+      { agentId: "r1", agentName: "Car agreement agent", documentName: "contract.jpg", documentType: "auto_insurance" as const },
+      { agentId: "r2", agentName: "Lease agent", documentName: "lease.pdf", documentType: "apartment_lease" as const },
+    ];
+    const onPickAgent = vi.fn();
+    render(<SearchResults state="recent" results={{ agents: [], messages: [] }} recent={recent} onPickAgent={onPickAgent} />);
+
+    expect(screen.getByRole("heading", { name: "Recently visited" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /car agreement agent/i }));
+    expect(onPickAgent).toHaveBeenCalledWith("r1");
+  });
+
+  it("says so when nothing has been opened yet", () => {
+    render(<SearchResults state="recent" results={{ agents: [], messages: [] }} recent={[]} onPickAgent={() => {}} />);
+    expect(screen.getByText(/no agents opened yet/i)).toBeInTheDocument();
+  });
+
   it("still links a matched message straight to that point in the chat", () => {
     render(<SearchResults state="ready" results={results} onPickAgent={() => {}} />);
     expect(screen.getByRole("link", { name: /rent is due/i })).toHaveAttribute("href", "/agents/a1?message=m1");

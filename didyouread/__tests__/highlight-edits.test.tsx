@@ -14,6 +14,11 @@ const pages = [
   },
 ];
 
+const twoPages = [
+  pages[0],
+  { page: 2, text: "A late fee of $95 applies after the fifth day of the month." },
+];
+
 const analysis = analyzePages(pages);
 const doc = buildHighlightedDocument(pages, analysis);
 const depositKey = highlightKey("The security deposit of $1,450 is non-refundable if the Tenant terminates early.");
@@ -27,6 +32,22 @@ function paint(overrides = {}) {
       overrides={overrides}
     />,
   );
+}
+
+function paintTwoPages(removedPages: number[] = []) {
+  const document2 = buildHighlightedDocument(twoPages, analyzePages(twoPages));
+  return render(
+    <DocumentHighlights
+      agentId="agent-1"
+      document={document2}
+      documentName="lease.pdf"
+      removedPages={removedPages}
+    />,
+  );
+}
+
+function pageText() {
+  return [...document.querySelectorAll("article")].map((node) => node.textContent ?? "");
 }
 
 function marked() {
@@ -106,11 +127,11 @@ describe("the change history", () => {
     fireEvent.click(screen.getByRole("button", { name: "Mark as Money" }));
     fireEvent.click(screen.getByRole("button", { name: /^History/ }));
 
-    expect(await screen.findByText(/1 highlight changed/)).toBeInTheDocument();
+    expect(await screen.findByText(/^1 change\./)).toBeInTheDocument();
     expect(screen.getByText(/Red flags → Money/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /^Undo:/ }));
-    await waitFor(() => expect(screen.getByText(/have not changed any highlights/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/have not changed anything yet/)).toBeInTheDocument());
   });
 
   it("restores everything in one go", async () => {
@@ -136,5 +157,48 @@ describe("the change history", () => {
 
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("were not restored"));
     expect(marked().some((text) => /non-refundable if/.test(text))).toBe(false);
+  });
+});
+
+describe("deleting a page", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("takes the page out of the view, saves it, and lists it in the history", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ hiddenPages: [2] }) });
+    vi.stubGlobal("fetch", fetchMock);
+    paintTwoPages();
+
+    expect(pageText().some((text) => /late fee/.test(text))).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Delete page 2" }));
+
+    await waitFor(() => expect(pageText().some((text) => /late fee/.test(text))).toBe(false));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/agents/agent-1/highlights",
+      expect.objectContaining({ method: "PATCH", body: JSON.stringify({ page: 2, hidden: true }) }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /^History/ }));
+    expect(await screen.findByText("Page 2 deleted")).toBeInTheDocument();
+  });
+
+  it("puts the page back when its history entry is undone", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ hiddenPages: [] }) }));
+    paintTwoPages([2]);
+
+    expect(pageText().some((text) => /late fee/.test(text))).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: /^History/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Undo: page 2 deleted" }));
+
+    await waitFor(() => expect(pageText().some((text) => /late fee/.test(text))).toBe(true));
+  });
+
+  it("keeps the page when saving the deletion fails", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, json: async () => ({}) }));
+    paintTwoPages();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete page 2" }));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/was not deleted/i));
+    expect(pageText().some((text) => /late fee/.test(text))).toBe(true);
   });
 });

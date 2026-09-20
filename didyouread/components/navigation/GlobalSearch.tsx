@@ -8,11 +8,15 @@ import { SearchResults } from "@/components/navigation/SearchResults";
 import type { AgentSearchResult } from "@/types/agent";
 
 const emptyResults: AgentSearchResult = { agents: [], messages: [] };
+/** How long a fetched shortlist is reused before the next focus refetches it. */
+const RECENT_MAX_AGE_MS = 30000;
 
 export function GlobalSearch() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState(emptyResults);
-  const [state, setState] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [state, setState] = useState<"idle" | "loading" | "ready" | "recent" | "error">("idle");
+  const [recent, setRecent] = useState<AgentSearchResult["agents"]>([]);
+  const recentLoadedAt = useRef(0);
   const container = useRef<HTMLDivElement>(null);
   const router = useRouter();
   const pathname = usePathname();
@@ -45,11 +49,33 @@ export function GlobalSearch() {
     };
   }, [query]);
 
+  /**
+   * Offers the agents whose chats were opened most recently, so the commonest
+   * reason to reach for search — going back to what you were just reading —
+   * takes no typing at all.
+   */
+  async function showRecent() {
+    setState("recent");
+    if (Date.now() - recentLoadedAt.current < RECENT_MAX_AGE_MS) return;
+    try {
+      const response = await fetch("/api/agents/recent");
+      if (!response.ok) throw new Error("Recent agents failed");
+      const result = (await response.json()) as { agents: AgentSearchResult["agents"] };
+      recentLoadedAt.current = Date.now();
+      setRecent(result.agents);
+    } catch {
+      // A missing shortlist is not worth an error message; search still works.
+      setRecent([]);
+    }
+  }
+
   /** Send the agent up into the spotlight instead of opening its chat. */
   function pickAgent(agentId: string) {
     setQuery("");
     setResults(emptyResults);
     setState("idle");
+    // This agent has just jumped to the top of the shortlist.
+    recentLoadedAt.current = 0;
     requestSpotlight(agentId);
     if (pathname !== "/") router.push("/");
   }
@@ -58,7 +84,7 @@ export function GlobalSearch() {
     setQuery(value);
     if (value.trim().length < 2) {
       setResults(emptyResults);
-      setState("idle");
+      void showRecent();
     }
   }
 
@@ -73,7 +99,7 @@ export function GlobalSearch() {
           aria-autocomplete="list"
           value={query}
           onChange={(event) => updateQuery(event.target.value)}
-          onFocus={() => query.trim().length >= 2 && setState("ready")}
+          onFocus={() => (query.trim().length >= 2 ? setState("ready") : void showRecent())}
           placeholder="Search agent names or conversations..."
           aria-expanded={state !== "idle"}
           aria-controls="global-search-results"
@@ -85,7 +111,9 @@ export function GlobalSearch() {
           <button type="button" aria-label="Clear search" onClick={() => updateQuery("")} className="absolute right-2 top-1/2 grid size-7 -translate-y-1/2 place-items-center rounded text-[#668070] hover:bg-[#e8f0e6]"><X size={16} /></button>
         ) : null}
       </label>
-      {state !== "idle" && <SearchResults results={results} state={state} onPickAgent={pickAgent} />}
+      {state !== "idle" && (
+        <SearchResults results={results} recent={recent} state={state} onPickAgent={pickAgent} />
+      )}
     </div>
   );
 }

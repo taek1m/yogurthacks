@@ -52,6 +52,46 @@ export async function listAgents(ownerId: string): Promise<DocumentAgent[]> {
   return records.map(publicAgent);
 }
 
+/**
+ * Notes that the reader opened this agent's chat. It deliberately leaves
+ * updatedAt alone: merely looking at an agent should not reshuffle the garden
+ * or the sidebar, which are ordered by when an agent last changed.
+ */
+export async function recordAgentVisit(ownerId: string, id: string): Promise<void> {
+  const lastOpenedAt = new Date().toISOString();
+  if (!isMongoConfigured()) {
+    const agent = memory.find((item) => item.ownerId === ownerId && item.id === id);
+    if (agent) agent.lastOpenedAt = lastOpenedAt;
+    return;
+  }
+  await (await collection()).updateOne({ ownerId, id }, { $set: { lastOpenedAt } });
+}
+
+/** The agents whose chats were opened most recently, newest first. */
+export async function recentAgents(
+  ownerId: string,
+  limit: number,
+): Promise<AgentSearchResult["agents"]> {
+  const records = !isMongoConfigured()
+    ? memory.filter((agent) => agent.ownerId === ownerId)
+    : await (await collection())
+        .find({ ownerId, lastOpenedAt: { $exists: true } })
+        .sort({ lastOpenedAt: -1 })
+        .limit(limit)
+        .toArray();
+
+  return records
+    .filter((agent) => Boolean(agent.lastOpenedAt))
+    .sort((a, b) => (b.lastOpenedAt ?? "").localeCompare(a.lastOpenedAt ?? ""))
+    .slice(0, limit)
+    .map((agent) => ({
+      agentId: agent.id,
+      agentName: agent.name,
+      documentName: agent.documentName,
+      documentType: agent.documentType,
+    }));
+}
+
 export async function countAgents(ownerId: string): Promise<number> {
   if (!isMongoConfigured()) {
     return memory.filter((agent) => agent.ownerId === ownerId).length;
@@ -292,7 +332,41 @@ export async function setHighlightOverride(
   return result ? publicAgent(result) : null;
 }
 
-/** Drops every reader edit, putting the machine's own highlights back. */
+/**
+ * Deletes a page from the marked-up view, or puts it back. The page text itself
+ * stays in extractedPages, so the agent still answers from it and the change
+ * can always be undone from the history.
+ */
+export async function setPageHidden(
+  ownerId: string,
+  id: string,
+  page: number,
+  hidden: boolean,
+): Promise<DocumentAgent | null> {
+  const updatedAt = new Date().toISOString();
+
+  if (!isMongoConfigured()) {
+    const agent = memory.find((item) => item.ownerId === ownerId && item.id === id);
+    if (!agent) return null;
+    const pages = new Set(agent.hiddenPages ?? []);
+    if (hidden) pages.add(page);
+    else pages.delete(page);
+    agent.hiddenPages = [...pages].sort((a, b) => a - b);
+    agent.updatedAt = updatedAt;
+    return publicAgent(agent);
+  }
+
+  const result = await (await collection()).findOneAndUpdate(
+    { ownerId, id },
+    hidden
+      ? { $addToSet: { hiddenPages: page }, $set: { updatedAt } }
+      : { $pull: { hiddenPages: page }, $set: { updatedAt } },
+    { returnDocument: "after" },
+  );
+  return result ? publicAgent(result) : null;
+}
+
+/** Drops every reader edit, putting the machine's own marked-up view back. */
 export async function clearHighlightOverrides(
   ownerId: string,
   id: string,
@@ -303,13 +377,14 @@ export async function clearHighlightOverrides(
     const agent = memory.find((item) => item.ownerId === ownerId && item.id === id);
     if (!agent) return null;
     agent.highlightOverrides = {};
+    agent.hiddenPages = [];
     agent.updatedAt = updatedAt;
     return publicAgent(agent);
   }
 
   const result = await (await collection()).findOneAndUpdate(
     { ownerId, id },
-    { $set: { highlightOverrides: {}, updatedAt } },
+    { $set: { highlightOverrides: {}, hiddenPages: [], updatedAt } },
     { returnDocument: "after" },
   );
   return result ? publicAgent(result) : null;
