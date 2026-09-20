@@ -1,6 +1,7 @@
 import type { Collection, Filter } from "mongodb";
 import { getDatabase, isMongoConfigured } from "@/lib/mongodb";
 import type {
+  AgentAnalysis,
   AgentMessage,
   AgentSearchResult,
   DocumentAgent,
@@ -85,7 +86,11 @@ export async function getAgentWithPages(
   if (!stored) return null;
   return {
     agent: publicAgent(stored),
-    pages: (stored.extractedPages ?? []).map((page) => ({ page: page.page, text: page.text })),
+    pages: (stored.extractedPages ?? []).map((page) => ({
+      page: page.page,
+      text: page.text,
+      source: page.source ?? stored.documentName,
+    })),
   };
 }
 
@@ -116,6 +121,45 @@ export async function updateAgent(
   const result = await (await collection()).findOneAndUpdate(
     { ownerId, id },
     { $set: { ...updates, updatedAt } },
+    { returnDocument: "after" },
+  );
+  return result ? publicAgent(result) : null;
+}
+
+/**
+ * Attaches another PDF to an agent: its pages join the extracted text, the
+ * analysis is recomputed over everything, and the agent says so in the chat.
+ */
+export async function addAgentDocument(
+  ownerId: string,
+  id: string,
+  update: {
+    sourceKind?: "pdf" | "topic";
+    documentName?: string;
+    documentNames: string[];
+    extractedPages: DocumentPage[];
+    analysis: AgentAnalysis;
+    statusLabel: string;
+    deadlineCount: number;
+    attentionCount: number;
+    message: AgentMessage;
+  },
+): Promise<DocumentAgent | null> {
+  const { message, ...fields } = update;
+  const updatedAt = new Date().toISOString();
+
+  if (!isMongoConfigured()) {
+    const agent = memory.find((item) => item.ownerId === ownerId && item.id === id);
+    if (!agent) return null;
+    Object.assign(agent, fields);
+    agent.messages.push(message);
+    agent.updatedAt = updatedAt;
+    return publicAgent(agent);
+  }
+
+  const result = await (await collection()).findOneAndUpdate(
+    { ownerId, id },
+    { $set: { ...fields, updatedAt }, $push: { messages: message } },
     { returnDocument: "after" },
   );
   return result ? publicAgent(result) : null;

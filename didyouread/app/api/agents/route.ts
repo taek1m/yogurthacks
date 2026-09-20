@@ -1,8 +1,9 @@
-import { PDFParse } from "pdf-parse";
 import { analyzePages, agentNameFor, classifyDocument, getStablePosition } from "@/lib/agent-utils";
 import { countAgents, createAgent, listAgents } from "@/lib/agent-repository";
 import { authErrorResponse, requireUserId } from "@/lib/auth";
-import type { StoredDocumentAgent } from "@/types/agent";
+import { nameDocumentAgent } from "@/lib/gemini";
+import { pdfErrorResponse, readPdfUpload } from "@/lib/pdf";
+import type { DocumentType, StoredDocumentAgent } from "@/types/agent";
 
 export const runtime = "nodejs";
 
@@ -18,46 +19,39 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const ownerId = await requireUserId();
-    const form = await request.formData();
-    const file = form.get("document");
-    if (!(file instanceof File)) return Response.json({ error: "A PDF document is required" }, { status: 400 });
-    if (file.size > 5 * 1024 * 1024) return Response.json({ error: "PDFs must be 5 MB or smaller" }, { status: 413 });
-    if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
-      return Response.json({ error: "Only PDF documents are supported" }, { status: 415 });
-    }
-
-    const data = new Uint8Array(await file.arrayBuffer());
-    if (new TextDecoder().decode(data.slice(0, 5)) !== "%PDF-") {
-      return Response.json({ error: "This file does not appear to be a valid PDF" }, { status: 400 });
-    }
-
-    const parser = new PDFParse({ data });
-    let result;
-    try {
-      result = await parser.getText();
-    } finally {
-      await parser.destroy();
-    }
-    if (result.total > 10) return Response.json({ error: "PDFs may contain at most 10 pages" }, { status: 400 });
-    const extractedPages = result.pages.map((page) => ({ page: page.num, text: page.text.trim() }));
-    if (!extractedPages.some((page) => page.text.length > 0)) {
-      return Response.json({ error: "No readable text was found. Upload a text-based PDF." }, { status: 422 });
-    }
+    const { file, pages: extractedPages } = await readPdfUpload(await request.formData());
 
     const allText = extractedPages.map((page) => page.text).join("\n");
-    const documentType = classifyDocument(file.name, allText);
+    const classified = classifyDocument(file.name, allText);
+    let documentType: DocumentType = classified;
+    let name = agentNameFor(classified);
+
+    // Let Gemini read the title and body to name the agent. The local classifier
+    // already produces a workable name, so a failure here must not fail the upload.
+    if (process.env.GEMINI_API_KEY) {
+      try {
+        const profile = await nameDocumentAgent(file.name, allText);
+        name = profile.name;
+        // The keyword classifier is the more reliable of the two when it is sure.
+        if (classified === "general") documentType = profile.documentType;
+      } catch (error) {
+        console.error("Gemini could not name this document; using the local name", error);
+      }
+    }
+
     const analysis = analyzePages(extractedPages);
     const now = new Date().toISOString();
     const index = await countAgents(ownerId);
-    const id = crypto.randomUUID();
     const deadlineCount = analysis.deadlines.length;
     const attentionCount = analysis.concerns.length;
     const statusLabel = attentionCount > 0 ? "Needs attention" : deadlineCount > 0 ? `${deadlineCount} deadline${deadlineCount === 1 ? "" : "s"}` : "Analysis complete";
+    const documentName = file.name.slice(0, 180);
     const agent: StoredDocumentAgent = {
-      id,
+      id: crypto.randomUUID(),
       ownerId,
-      name: agentNameFor(documentType),
-      documentName: file.name.slice(0, 180),
+      name,
+      documentName,
+      documentNames: [documentName],
       sourceKind: "pdf",
       documentType,
       status: "ready",
@@ -66,15 +60,15 @@ export async function POST(request: Request) {
       attentionCount,
       position: getStablePosition(index),
       analysis,
-      messages: [{ id: crypto.randomUUID(), role: "assistant", content: `I finished reading ${file.name}. Ask me about any term, deadline, or cost and I will point you back to the supporting text.`, createdAt: now }],
-      extractedPages,
+      messages: [{ id: crypto.randomUUID(), role: "assistant", content: `I finished reading ${file.name}. Ask me about any term, deadline, or cost and I will point you back to the supporting text. You can also attach another PDF to this conversation at any time.`, createdAt: now }],
+      extractedPages: extractedPages.map((page) => ({ ...page, source: documentName })),
       createdAt: now,
       updatedAt: now,
     };
     return Response.json({ agent: await createAgent(agent) }, { status: 201 });
   } catch (error) {
-    const authResponse = authErrorResponse(error);
-    if (authResponse) return authResponse;
+    const handled = authErrorResponse(error) ?? pdfErrorResponse(error);
+    if (handled) return handled;
     console.error("Agent upload failed", error);
     return Response.json({ error: "The PDF could not be analyzed" }, { status: 500 });
   }

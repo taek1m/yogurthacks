@@ -115,7 +115,11 @@ const DEADLINE_PATTERN = /due (date|on|by)|deadline|renew|expires?|expiration|ef
 const FINANCIAL_PATTERN = /\$\s?[\d,]+|\bUSD\b|premium|deductible|deposit|balance|amount due|monthly payment|per month|payment of|total of/i;
 const DATE_PATTERN = /\b(\d{1,2}\/\d{1,2}\/\d{2,4}|(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}|\d+\s+(?:calendar |business )?days)\b/i;
 
-const MAX_PER_SECTION = { concerns: 8, deadlines: 5, financial: 6, favorable: 5 } as const;
+// Generous caps: a real contract has many terms worth a second look, and the
+// panel lets the reader filter by category anyway.
+const MAX_PER_SECTION = { concerns: 14, deadlines: 10, financial: 12, favorable: 8 } as const;
+// How many sentences a single concern rule may claim, by severity.
+const PER_RULE = { red_flag: 4, important: 3 } as const;
 
 function quote(text: string): string {
   return text.replace(/\s+/g, " ").trim().slice(0, 220) || "Not found";
@@ -178,7 +182,7 @@ export function analyzePages(
   // Red flags win outright, then dates, then amounts, then softer concerns.
   const concernsFor = (severity: FindingSeverity) =>
     CONCERN_RULES.filter((rule) => rule.severity === severity).flatMap((rule) =>
-      take(severity === "red_flag" ? 2 : 1, (line) => rule.pattern.test(line.text)).map((line) =>
+      take(PER_RULE[severity === "red_flag" ? "red_flag" : "important"], (line) => rule.pattern.test(line.text)).map((line) =>
         makeFinding("concern", rule.title, rule.detail, line.page, line.text, rule.severity),
       ),
     );

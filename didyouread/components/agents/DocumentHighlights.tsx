@@ -1,6 +1,6 @@
 "use client";
 
-import { CalendarPlus, CircleAlert, CircleCheck, DollarSign, FileText, TriangleAlert, X } from "lucide-react";
+import { CalendarPlus, CircleAlert, CircleCheck, DollarSign, FileText, PanelRightClose, TriangleAlert, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { HighlightMark, HighlightedDocument } from "@/lib/document-highlights";
@@ -76,9 +76,13 @@ function downloadReminder(mark: HighlightMark) {
 export function DocumentHighlights({
   document: highlighted,
   documentName,
+  documentNames,
+  onHide,
 }: {
   document: HighlightedDocument;
   documentName: string;
+  documentNames?: string[];
+  onHide?: () => void;
 }) {
   const [active, setActive] = useState<Tone[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -92,6 +96,9 @@ export function DocumentHighlights({
   const selectedMark = highlighted.marks.find((mark) => mark.findingId === selected) ?? null;
   const shown = (tone: Tone) => active.length === 0 || active.includes(tone);
   const total = highlighted.marks.length;
+  const files = documentNames?.length ? documentNames : [documentName];
+  // Page numbers run on across documents, so each card says which file it is from.
+  const showSources = files.length > 1;
 
   function toggleTone(tone: Tone) {
     setActive((current) =>
@@ -102,14 +109,32 @@ export function DocumentHighlights({
   return (
     <aside className="flex min-w-0 flex-col bg-[#f3f7ef]" aria-label={`Highlighted text of ${documentName}`}>
       <div className="border-b border-[#d4dfd1] px-5 py-5 sm:px-7">
-        <p className="text-xs font-bold uppercase text-[#4c765a]">Marked-up document</p>
+        <div className="flex items-start justify-between gap-3">
+          <p className="text-xs font-bold uppercase text-[#4c765a]">Marked-up document</p>
+          {onHide && (
+            <button
+              type="button"
+              onClick={onHide}
+              aria-expanded
+              className="-mt-1 inline-flex shrink-0 items-center gap-1.5 rounded-md border border-[#c6d4c3] bg-white px-2.5 py-1.5 text-xs font-bold text-[#2d5640] hover:bg-[#eef6ec]"
+            >
+              <PanelRightClose size={14} />
+              Hide
+            </button>
+          )}
+        </div>
         <h2 className="mt-0.5 flex items-center gap-2 font-display text-2xl font-semibold text-[#173c28]">
           <FileText size={20} className="shrink-0" />
-          <span className="truncate">{documentName}</span>
+          <span className="truncate">{files[0]}</span>
         </h2>
+        {showSources && (
+          <p className="mt-1 truncate text-xs font-semibold text-[#4c765a]">
+            + {files.slice(1).join(", ")}
+          </p>
+        )}
         <p className="mt-1.5 text-xs leading-5 text-[#63776a]">
           {total > 0
-            ? `${total} passage${total === 1 ? "" : "s"} marked across ${highlighted.pages.length} page${highlighted.pages.length === 1 ? "" : "s"}. Tap a highlight to see why.`
+            ? `${total} passage${total === 1 ? "" : "s"} marked across ${highlighted.pages.length} page${highlighted.pages.length === 1 ? "" : "s"}${showSources ? ` in ${files.length} documents` : ""}. Tap a highlight to see why.`
             : "Nothing stood out in the extracted text. Read it in full below."}
         </p>
 
@@ -184,7 +209,10 @@ export function DocumentHighlights({
       <div className="flex-1 space-y-4 overflow-y-auto px-5 py-5 sm:px-7">
         {highlighted.pages.map((page) => (
           <article key={page.page} className="rounded-lg border border-[#dce5d9] bg-[#fffef9] p-4 shadow-sm">
-            <p className="mb-2 text-[11px] font-bold uppercase tracking-wide text-[#7b897f]">Page {page.page}</p>
+            <p className="mb-2 flex items-baseline gap-1.5 text-[11px] font-bold uppercase tracking-wide text-[#7b897f]">
+              <span>Page {page.page}</span>
+              {showSources && page.source && <span className="truncate normal-case text-[#9aa79e]">· {page.source}</span>}
+            </p>
             <p className="whitespace-pre-wrap text-[13px] leading-6 text-[#31473a]">
               {page.segments.map((segment, index) => {
                 const mark = segment.mark;

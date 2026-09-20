@@ -22,6 +22,8 @@ export interface PageSegment {
 
 export interface HighlightedPage {
   page: number;
+  /** File this page came from, when the agent holds more than one document. */
+  source?: string;
   segments: PageSegment[];
 }
 
@@ -156,7 +158,7 @@ export function buildHighlightedDocument(
       cursor = span.end;
     }
     if (cursor < page.text.length) segments.push({ text: page.text.slice(cursor), mark: null });
-    return { page: page.page, segments };
+    return { page: page.page, source: page.source, segments };
   });
 
   return {

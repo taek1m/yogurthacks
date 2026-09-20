@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { AgentChat } from "@/components/agents/AgentChat";
-import { DocumentHighlights } from "@/components/agents/DocumentHighlights";
+import { AgentWorkspace } from "@/components/agents/AgentWorkspace";
 import { getAgentWithPages } from "@/lib/agent-repository";
 import { buildHighlightedDocument } from "@/lib/document-highlights";
 import { getCurrentUserId } from "@/lib/auth";
@@ -27,11 +27,11 @@ export default async function AgentPage({
       : null;
 
   return (
-    <div
-      className={`mx-auto grid w-full max-w-[1500px] flex-1 grid-cols-1 ${highlighted ? "lg:grid-cols-[minmax(0,1fr)_minmax(400px,0.9fr)]" : ""}`}
-    >
-      <AgentChat agent={agent} highlightedMessage={highlightedMessage} />
-      {highlighted && <DocumentHighlights document={highlighted} documentName={agent.documentName} />}
-    </div>
+    <AgentWorkspace
+      chat={<AgentChat agent={agent} highlightedMessage={highlightedMessage} />}
+      document={highlighted}
+      documentName={agent.documentName}
+      documentNames={agent.documentNames}
+    />
   );
 }

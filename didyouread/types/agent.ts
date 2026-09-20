@@ -31,6 +31,8 @@ export type HighlightKind = "concern" | "deadline" | "financial" | "favorable";
 export interface DocumentPage {
   page: number;
   text: string;
+  /** File the page came from, once an agent holds more than one document. */
+  source?: string;
 }
 
 export interface AgentAnalysis {
@@ -54,6 +56,8 @@ export interface DocumentAgent {
   ownerId: string;
   name: string;
   documentName: string;
+  /** Every PDF this agent answers about, in the order they were added. */
+  documentNames?: string[];
   sourceKind?: "pdf" | "topic";
   topic?: string;
   documentType: DocumentType;
@@ -69,7 +73,7 @@ export interface DocumentAgent {
 }
 
 export interface StoredDocumentAgent extends DocumentAgent {
-  extractedPages: Array<{ page: number; text: string }>;
+  extractedPages: DocumentPage[];
 }
 
 export interface AgentSearchResult {
