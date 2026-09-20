@@ -62,6 +62,7 @@ export function toneOf(mark: HighlightMark): Tone {
   return mark.kind;
 }
 
+/** Falls back to a calendar file the reader can open in anything. */
 function downloadReminder(mark: HighlightMark) {
   const day = new Date(Date.now() + 86400000).toISOString().slice(0, 10).replaceAll("-", "");
   const ics = [
@@ -104,6 +105,41 @@ export function DocumentHighlights({
   // here first and are saved in the background.
   const [edits, setEdits] = useState<Record<string, HighlightOverride>>(() => overrides ?? {});
   const [saveError, setSaveError] = useState("");
+  const [reminder, setReminder] = useState<{ text: string; link?: string } | null>(null);
+  const [addingReminder, setAddingReminder] = useState(false);
+
+  /**
+   * Tries the reader's own Google Calendar first, since that is where they will
+   * actually see it, and downloads a calendar file when that is not available.
+   */
+  async function addReminder(mark: HighlightMark) {
+    setAddingReminder(true);
+    setReminder(null);
+    try {
+      const response = await fetch("/api/reminders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: `Confirm: ${mark.title}`, detail: mark.detail, date: mark.date }),
+      });
+      const result = (await response.json()) as { link?: string; date?: string; reason?: string };
+      if (response.ok) {
+        setReminder({ text: `Added to your Google Calendar on ${result.date}.`, link: result.link });
+        return;
+      }
+      downloadReminder(mark);
+      setReminder({
+        text:
+          result.reason === "no_scope"
+            ? "Calendar access was not granted, so a calendar file was downloaded instead."
+            : "No Google account is connected, so a calendar file was downloaded instead.",
+      });
+    } catch {
+      downloadReminder(mark);
+      setReminder({ text: "Could not reach the calendar, so a calendar file was downloaded instead." });
+    } finally {
+      setAddingReminder(false);
+    }
+  }
 
   const editOf = (mark: HighlightMark): HighlightOverride | undefined => edits[mark.key];
   const shownMark = (mark: HighlightMark): HighlightMark | null => {
@@ -243,14 +279,30 @@ export function DocumentHighlights({
                 <p className="mt-1 text-xs font-semibold text-[#6f5a12]">Date found: {selectedMark.date}</p>
               )}
               {selectedMark.kind === "deadline" && (
-                <button
-                  type="button"
-                  onClick={() => downloadReminder(selectedMark)}
-                  className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-[#b9cdb8] bg-white px-2.5 py-1.5 text-xs font-bold text-[#2d6841] hover:bg-[#eef6ec]"
-                >
-                  <CalendarPlus size={14} />
-                  Set reminder
-                </button>
+                <div className="mt-2">
+                  <button
+                    type="button"
+                    disabled={addingReminder}
+                    onClick={() => void addReminder(selectedMark)}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-[#b9cdb8] bg-white px-2.5 py-1.5 text-xs font-bold text-[#2d6841] hover:bg-[#eef6ec] disabled:opacity-50"
+                  >
+                    <CalendarPlus size={14} />
+                    {addingReminder ? "Adding to your calendar..." : "Set reminder"}
+                  </button>
+                  {reminder && (
+                    <p className="mt-1.5 text-xs leading-5 text-[#4c765a]">
+                      {reminder.text}
+                      {reminder.link && (
+                        <>
+                          {" "}
+                          <a href={reminder.link} target="_blank" rel="noreferrer" className="font-bold underline">
+                            Open it
+                          </a>
+                        </>
+                      )}
+                    </p>
+                  )}
+                </div>
               )}
 
               {/* 기계가 고른 분류를 읽는 사람이 바로잡는 자리 */}
@@ -324,7 +376,10 @@ export function DocumentHighlights({
                 const tone = toneOf(mark);
                 const dimmed = !shown(tone);
                 const isSelected = mark.findingId === selected;
-                const select = () => setSelected(isSelected ? null : mark.findingId);
+                const select = () => {
+                  setReminder(null);
+                  setSelected(isSelected ? null : mark.findingId);
+                };
                 return (
                   <mark
                     key={index}
